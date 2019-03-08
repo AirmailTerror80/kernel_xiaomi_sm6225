@@ -20,8 +20,7 @@
 static noinline size_t
 lzo1x_1_do_compress(const unsigned char *in, size_t in_len,
 		    unsigned char *out, size_t *out_len,
-		    size_t ti, void *wrkmem, signed char *state_offset,
-		    const unsigned char bitstream_version)
+		    size_t ti, void *wrkmem, signed char *state_offset)
 {
 	const unsigned char *ip;
 	unsigned char *op;
@@ -47,9 +46,11 @@ next:
 			break;
 		dv = get_unaligned_le32(ip);
 
-		if (dv == 0 && bitstream_version) {
+		if (dv == 0) {
 			const unsigned char *ir = ip + 4;
-			const unsigned char *limit = min(ip_end, ip + MAX_ZERO_RUN_LENGTH + 1);
+			const unsigned char *limit = ip_end
+				< (ip + MAX_ZERO_RUN_LENGTH + 1)
+				? ip_end : ip + MAX_ZERO_RUN_LENGTH + 1;
 #if defined(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS) && \
 	defined(LZO_FAST_64BIT_MEMORY_ACCESS)
 			u64 dv64;
@@ -80,19 +81,17 @@ next:
 					ALIGN((uintptr_t)ir, 4)) &&
 					(ir < limit) && (*ir == 0))
 				ir++;
-			if (IS_ALIGNED((uintptr_t)ir, 4)) {
-				for (; (ir + 4) <= limit; ir += 4) {
-					dv = *((u32 *)ir);
-					if (dv) {
+			for (; (ir + 4) <= limit; ir += 4) {
+				dv = *((u32 *)ir);
+				if (dv) {
 #  if defined(__LITTLE_ENDIAN)
-						ir += __builtin_ctz(dv) >> 3;
+					ir += __builtin_ctz(dv) >> 3;
 #  elif defined(__BIG_ENDIAN)
-						ir += __builtin_clz(dv) >> 3;
+					ir += __builtin_clz(dv) >> 3;
 #  else
 #    error "missing endian definition"
 #  endif
-						break;
-					}
+					break;
 				}
 			}
 #endif
@@ -308,19 +307,11 @@ static int lzogeneric1x_1_compress(const unsigned char *in, size_t in_len,
 	size_t l = in_len;
 	size_t t = 0;
 	signed char state_offset = -2;
-	unsigned int m4_max_offset;
 
-	// LZO v0 will never write 17 as first byte (except for zero-length
-	// input), so this is used to version the bitstream
-	if (bitstream_version > 0) {
-		*op++ = 17;
-		*op++ = bitstream_version;
-		m4_max_offset = M4_MAX_OFFSET_V1;
-	} else {
-		m4_max_offset = M4_MAX_OFFSET_V0;
-	}
-
-	data_start = op;
+	// LZO v0 will never write 17 as first byte,
+	// so this is used to version the bitstream
+	*op++ = 17;
+	*op++ = LZO_VERSION;
 
 	while (l > 20) {
 		size_t ll = min_t(size_t, l, m4_max_offset + 1);
@@ -329,8 +320,8 @@ static int lzogeneric1x_1_compress(const unsigned char *in, size_t in_len,
 			break;
 		BUILD_BUG_ON(D_SIZE * sizeof(lzo_dict_t) > LZO1X_1_MEM_COMPRESS);
 		memset(wrkmem, 0, D_SIZE * sizeof(lzo_dict_t));
-		t = lzo1x_1_do_compress(ip, ll, op, out_len, t, wrkmem,
-					&state_offset, bitstream_version);
+		t = lzo1x_1_do_compress(ip, ll, op, out_len,
+					t, wrkmem, &state_offset);
 		ip += ll;
 		op += *out_len;
 		l  -= ll;
