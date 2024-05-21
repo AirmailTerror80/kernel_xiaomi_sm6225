@@ -2219,8 +2219,6 @@ static int select_fallback_rq(int cpu, struct task_struct *p, bool allow_iso)
 		for_each_cpu(dest_cpu, nodemask) {
 			if (!cpu_active(dest_cpu))
 				continue;
-			if (cpu_isolated(dest_cpu))
-				continue;
 			if (cpumask_test_cpu(dest_cpu, p->cpus_ptr)) {
 				if (cpu_rq(dest_cpu)->nr_running < 32)
 					return dest_cpu;
@@ -2305,8 +2303,7 @@ int select_task_rq(struct task_struct *p, int cpu, int sd_flags, int wake_flags)
 	 * [ this allows ->select_task() to simply return task_cpu(p) and
 	 *   not worry about this generic constraint ]
 	 */
-	if (unlikely(!is_cpu_allowed(p, cpu)) ||
-			(cpu_isolated(cpu) && !allow_isolated))
+	if (unlikely(!is_cpu_allowed(p, cpu)))
 		cpu = select_fallback_rq(task_cpu(p), p, allow_isolated);
 
 	return cpu;
@@ -2534,7 +2531,7 @@ void scheduler_ipi(void)
 	/*
 	 * Check if someone kicked us for doing the nohz idle load balance.
 	 */
-	if (unlikely(got_nohz_idle_kick()) && !cpu_isolated(cpu)) {
+	if (unlikely(got_nohz_idle_kick())) {
 		this_rq()->idle_balance = 1;
 		raise_softirq_irqoff(SCHED_SOFTIRQ);
 	}
@@ -3770,7 +3767,7 @@ void sched_exec(void)
 	if (dest_cpu == smp_processor_id())
 		goto unlock;
 
-	if (likely(cpu_active(dest_cpu) && likely(!cpu_isolated(dest_cpu)))) {
+	if (likely(cpu_active(dest_cpu))) {
 		struct migration_arg arg = { p, dest_cpu };
 
 		raw_spin_unlock_irqrestore(&p->pi_lock, flags);
@@ -5794,7 +5791,6 @@ long sched_setaffinity(pid_t pid, const struct cpumask *in_mask)
 	cpumask_var_t cpus_allowed, new_mask;
 	struct task_struct *p;
 	int retval;
-	int dest_cpu;
 
 	rcu_read_lock();
 
@@ -6696,37 +6692,6 @@ static struct task_struct *__pick_migrate_task(struct rq *rq)
 }
 
 /*
- * Remove a task from the runqueue and pretend that it's migrating. This
- * should prevent migrations for the detached task and disallow further
- * changes to tsk_cpus_allowed.
- */
-static void
-detach_one_task(struct task_struct *p, struct rq *rq, struct list_head *tasks)
-{
-	lockdep_assert_held(&rq->lock);
-
-	p->on_rq = TASK_ON_RQ_MIGRATING;
-	deactivate_task(rq, p, 0);
-	list_add(&p->se.group_node, tasks);
-}
-
-static void attach_tasks(struct list_head *tasks, struct rq *rq)
-{
-	struct task_struct *p;
-
-	lockdep_assert_held(&rq->lock);
-
-	while (!list_empty(tasks)) {
-		p = list_first_entry(tasks, struct task_struct, se.group_node);
-		list_del_init(&p->se.group_node);
-
-		BUG_ON(task_rq(p) != rq);
-		activate_task(rq, p, 0);
-		p->on_rq = TASK_ON_RQ_QUEUED;
-	}
-}
-
-/*
  * Migrate all tasks (not pinned if pinned argument say so) from the rq,
  * sleeping tasks will be migrated by try_to_wake_up()->select_task_rq().
  *
@@ -6734,18 +6699,12 @@ static void attach_tasks(struct list_head *tasks, struct rq *rq)
  * there's no concurrency possible, we hold the required locks anyway
  * because of lock validation efforts.
  */
-static void migrate_tasks(struct rq *dead_rq, struct rq_flags *rf,
-			  bool migrate_pinned_tasks)
+static void migrate_tasks(struct rq *dead_rq, struct rq_flags *rf)
 {
 	struct rq *rq = dead_rq;
 	struct task_struct *next, *stop = rq->stop;
 	struct rq_flags orf = *rf;
 	int dest_cpu;
-	unsigned int num_pinned_kthreads = 1; /* this thread */
-	LIST_HEAD(tasks);
-	cpumask_t avail_cpus;
-
-	cpumask_copy(&avail_cpus, cpu_online_mask);
 
 	/*
 	 * Fudge the rq selection such that the below task selection loop
@@ -6775,13 +6734,6 @@ static void migrate_tasks(struct rq *dead_rq, struct rq_flags *rf,
 
 		next = __pick_migrate_task(rq);
 
-		if (!migrate_pinned_tasks && next->flags & PF_KTHREAD &&
-			!cpumask_intersects(&avail_cpus, &next->cpus_mask)) {
-			detach_one_task(next, rq, &tasks);
-			num_pinned_kthreads += 1;
-			continue;
-		}
-
 		/*
 		 * Rules for changing task_struct::cpus_mask are holding
 		 * both pi_lock and rq->lock, such that holding either
@@ -6794,19 +6746,13 @@ static void migrate_tasks(struct rq *dead_rq, struct rq_flags *rf,
 		rq_unlock(rq, rf);
 		raw_spin_lock(&next->pi_lock);
 		rq_relock(rq, rf);
-		if (!(rq->clock_update_flags & RQCF_UPDATED))
-			update_rq_clock(rq);
 
 		/*
 		 * Since we're inside stop-machine, _nothing_ should have
 		 * changed the task, WARN if weird stuff happened, because in
 		 * that case the above rq->lock drop is a fail too.
-		 * However, during cpu isolation the load balancer might have
-		 * interferred since we don't stop all CPUs. Ignore warning for
-		 * this case.
 		 */
 		if (task_rq(next) != rq || !task_on_rq_queued(next)) {
-			WARN_ON(migrate_pinned_tasks);
 			raw_spin_unlock(&next->pi_lock);
 			continue;
 		}
@@ -6819,218 +6765,11 @@ static void migrate_tasks(struct rq *dead_rq, struct rq_flags *rf,
 			rq = dead_rq;
 			*rf = orf;
 			rq_relock(rq, rf);
-			if (!(rq->clock_update_flags & RQCF_UPDATED))
-				update_rq_clock(rq);
 		}
 		raw_spin_unlock(&next->pi_lock);
 	}
 
 	rq->stop = stop;
-
-	if (num_pinned_kthreads > 1)
-		attach_tasks(&tasks, rq);
-}
-
-void set_rq_online(struct rq *rq);
-void set_rq_offline(struct rq *rq);
-
-int do_isolation_work_cpu_stop(void *data)
-{
-	unsigned int cpu = smp_processor_id();
-	struct rq *rq = cpu_rq(cpu);
-	struct rq_flags rf;
-
-	local_irq_disable();
-
-	irq_migrate_all_off_this_cpu();
-
-	sched_ttwu_pending();
-
-	/* Update our root-domain */
-	rq_lock(rq, &rf);
-
-	/*
-	 * Temporarily mark the rq as offline. This will allow us to
-	 * move tasks off the CPU.
-	 */
-	if (rq->rd) {
-		BUG_ON(!cpumask_test_cpu(cpu, rq->rd->span));
-		set_rq_offline(rq);
-	}
-
-	migrate_tasks(rq, &rf, false);
-
-	if (rq->rd)
-		set_rq_online(rq);
-	rq_unlock(rq, &rf);
-
-	local_irq_enable();
-	return 0;
-}
-
-int do_unisolation_work_cpu_stop(void *data)
-{
-	return 0;
-}
-
-static void sched_update_group_capacities(int cpu)
-{
-	struct sched_domain *sd;
-
-	mutex_lock(&sched_domains_mutex);
-	rcu_read_lock();
-
-	for_each_domain(cpu, sd) {
-		int balance_cpu = group_balance_cpu(sd->groups);
-
-		init_sched_groups_capacity(cpu, sd);
-		/*
-		 * Need to ensure this is also called with balancing
-		 * cpu.
-		 */
-		if (cpu != balance_cpu)
-			init_sched_groups_capacity(balance_cpu, sd);
-	}
-
-	rcu_read_unlock();
-	mutex_unlock(&sched_domains_mutex);
-}
-
-static unsigned int cpu_isolation_vote[NR_CPUS];
-
-int sched_isolate_count(const cpumask_t *mask, bool include_offline)
-{
-	cpumask_t count_mask = CPU_MASK_NONE;
-
-	if (include_offline) {
-		cpumask_complement(&count_mask, cpu_online_mask);
-		cpumask_and(&count_mask, &count_mask, mask);
-	} else {
-		cpumask_and(&count_mask, mask, cpu_online_mask);
-	}
-
-	return cpumask_weight(&count_mask);
-}
-
-/*
- * 1) CPU is isolated and cpu is offlined:
- *	Unisolate the core.
- * 2) CPU is not isolated and CPU is offlined:
- *	No action taken.
- * 3) CPU is offline and request to isolate
- *	Request ignored.
- * 4) CPU is offline and isolated:
- *	Not a possible state.
- * 5) CPU is online and request to isolate
- *	Normal case: Isolate the CPU
- * 6) CPU is not isolated and comes back online
- *	Nothing to do
- *
- * Note: The client calling sched_isolate_cpu() is repsonsible for ONLY
- * calling sched_unisolate_cpu() on a CPU that the client previously isolated.
- * Client is also responsible for unisolating when a core goes offline
- * (after CPU is marked offline).
- */
-int sched_isolate_cpu(int cpu)
-{
-	struct rq *rq;
-	cpumask_t avail_cpus;
-	int ret_code = 0;
-	u64 start_time = 0;
-
-	if (trace_sched_isolate_enabled())
-		start_time = sched_clock();
-
-	cpu_maps_update_begin();
-
-	cpumask_copy(&avail_cpus, cpu_online_mask);
-
-	if (cpu < 0 || cpu >= nr_cpu_ids || !cpu_possible(cpu)
-			|| !cpu_online(cpu)) {
-		ret_code = -EINVAL;
-		goto out;
-	}
-
-	rq = cpu_rq(cpu);
-
-	if (++cpu_isolation_vote[cpu] > 1)
-		goto out;
-
-	/* We cannot isolate ALL cpus in the system */
-	if (cpumask_weight(&avail_cpus) == 1) {
-		--cpu_isolation_vote[cpu];
-		ret_code = -EINVAL;
-		goto out;
-	}
-
-	cpumask_clear_cpu(cpu, &avail_cpus);
-
-	/* Migrate timers */
-	smp_call_function_any(&avail_cpus, hrtimer_quiesce_cpu, &cpu, 1);
-	smp_call_function_any(&avail_cpus, timer_quiesce_cpu, &cpu, 1);
-
-	irq_lock_sparse();
-	stop_cpus(cpumask_of(cpu), do_isolation_work_cpu_stop, 0);
-	irq_unlock_sparse();
-
-	calc_load_migrate(rq);
-	update_max_interval();
-	sched_update_group_capacities(cpu);
-
-out:
-	cpu_maps_update_done();
-	return ret_code;
-}
-
-/*
- * Note: The client calling sched_isolate_cpu() is repsonsible for ONLY
- * calling sched_unisolate_cpu() on a CPU that the client previously isolated.
- * Client is also responsible for unisolating when a core goes offline
- * (after CPU is marked offline).
- */
-int sched_unisolate_cpu_unlocked(int cpu)
-{
-	int ret_code = 0;
-	u64 start_time = 0;
-
-	if (cpu < 0 || cpu >= nr_cpu_ids || !cpu_possible(cpu)) {
-		ret_code = -EINVAL;
-		goto out;
-	}
-	if (trace_sched_isolate_enabled())
-		start_time = sched_clock();
-
-	if (!cpu_isolation_vote[cpu]) {
-		ret_code = -EINVAL;
-		goto out;
-	}
-
-	if (--cpu_isolation_vote[cpu])
-		goto out;
-
-	update_max_interval();
-	sched_update_group_capacities(cpu);
-
-	if (cpu_online(cpu)) {
-		stop_cpus(cpumask_of(cpu), do_unisolation_work_cpu_stop, 0);
-
-		/* Kick CPU to immediately do load balancing */
-		if (!atomic_fetch_or(NOHZ_KICK_MASK, nohz_flags(cpu)))
-			smp_send_reschedule(cpu);
-	}
-
-out:
-	return ret_code;
-}
-
-int sched_unisolate_cpu(int cpu)
-{
-	int ret_code;
-
-	cpu_maps_update_begin();
-	ret_code = sched_unisolate_cpu_unlocked(cpu);
-	cpu_maps_update_done();
-	return ret_code;
 }
 
 #endif /* CONFIG_HOTPLUG_CPU */
@@ -7220,7 +6959,7 @@ int sched_cpu_dying(unsigned int cpu)
 		BUG_ON(!cpumask_test_cpu(cpu, rq->rd->span));
 		set_rq_offline(rq);
 	}
-	migrate_tasks(rq, &rf, true);
+	migrate_tasks(rq, &rf);
 	BUG_ON(rq->nr_running != 1);
 	rq_unlock_irqrestore(rq, &rf);
 
