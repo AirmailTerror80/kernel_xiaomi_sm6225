@@ -468,6 +468,17 @@ LSM_HANDLER_TYPE ksu_handle_prctl(int option, unsigned long arg2, unsigned long 
 		return 0;
 	}
 
+	if (arg2 == CMD_GET_MANAGER_UID) {
+		uid_t manager_uid = ksu_get_manager_uid();
+		if (copy_to_user(arg3, &manager_uid, sizeof(manager_uid))) {
+			pr_err("get manager uid failed\n");
+		}
+		if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {
+			pr_err("prctl reply error, cmd: %lu\n", arg2);
+		}
+		return 0;
+	}
+
 	if (arg2 == CMD_ENABLE_SU) {
 		bool enabled = (arg3 != 0);
 		if (enabled == ksu_su_compat_enabled) {
@@ -488,7 +499,6 @@ LSM_HANDLER_TYPE ksu_handle_prctl(int option, unsigned long arg2, unsigned long 
 		if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {
 			pr_err("prctl reply error, cmd: %lu\n", arg2);
 		}
-
 		return 0;
 	}
 
@@ -984,7 +994,7 @@ LSM_HANDLER_TYPE ksu_inode_permission(struct inode *inode, int mask)
 {
 	if (inode && inode->i_sb 
 		&& unlikely(inode->i_sb->s_magic == DEVPTS_SUPER_MAGIC)) {
-		pr_info("%s: handling devpts for: %s \n", __func__, current->comm);
+		//pr_info("%s: handling devpts for: %s \n", __func__, current->comm);
 		__ksu_handle_devpts(inode);
 	}
 

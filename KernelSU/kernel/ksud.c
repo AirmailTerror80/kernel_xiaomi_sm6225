@@ -23,7 +23,6 @@
 #else
 #include <linux/sched.h> /* fatal_signal_pending */
 #endif
-#include <linux/slab.h>
 
 #include "allowlist.h"
 #include "klog.h" // IWYU pragma: keep
