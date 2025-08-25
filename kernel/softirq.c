@@ -305,7 +305,7 @@ restart:
 		pending >>= softirq_bit;
 	}
 
-	__this_cpu_write(active_softirqs, 0);
+        __this_cpu_write(active_softirqs, 0);
 	if (__this_cpu_read(ksoftirqd) == current)
 		rcu_softirq_qs();
 	local_irq_disable();
@@ -367,6 +367,7 @@ void irq_enter(void)
 
 static inline void invoke_softirq(void)
 {
+
 	if (!force_irqthreads) {
 #ifdef CONFIG_HAVE_IRQ_EXIT_ON_IRQ_STACK
 		/*

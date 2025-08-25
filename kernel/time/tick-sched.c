@@ -26,7 +26,6 @@
 #include <linux/module.h>
 #include <linux/irq_work.h>
 #include <linux/posix-timers.h>
-#include <linux/timer.h>
 #include <linux/context_tracking.h>
 #include <linux/mm.h>
 #include <linux/rq_stats.h>
@@ -242,6 +241,7 @@ static void nohz_full_kick_func(struct irq_work *work)
 
 static DEFINE_PER_CPU(struct irq_work, nohz_full_kick_work) = {
 	.func = nohz_full_kick_func,
+	.flags = ATOMIC_INIT(IRQ_WORK_HARD_IRQ),
 };
 
 /*
@@ -939,11 +939,6 @@ static void __tick_nohz_idle_stop_tick(struct tick_sched *ts)
 {
 	ktime_t expires;
 	int cpu = smp_processor_id();
-
-#ifdef CONFIG_SMP
-	if (check_pending_deferrable_timers(cpu))
-		raise_softirq_irqoff(TIMER_SOFTIRQ);
-#endif
 
 	/*
 	 * If tick_nohz_get_sleep_length() ran tick_nohz_next_event(), the

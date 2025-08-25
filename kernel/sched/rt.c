@@ -7,9 +7,8 @@
 
 #include "pelt.h"
 
-#include <linux/interrupt.h>
-
 #include <trace/events/sched.h>
+#include <linux/interrupt.h>
 
 #include "walt.h"
 
@@ -1504,9 +1503,9 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags)
 {
 	struct task_struct *curr, *tgt_task;
 	struct rq *rq;
-	bool may_not_preempt;
 	struct rq *this_cpu_rq;
 	bool sync = !!(flags & WF_SYNC);
+	bool may_not_preempt;
 	bool test;
 	int this_cpu;
 
@@ -1558,9 +1557,8 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags)
 	 * systems like big.LITTLE.
 	 */
 	may_not_preempt = task_may_not_preempt(curr, cpu);
-
 	test = static_branch_unlikely(&sched_energy_present) ||
-	       may_not_preempt || (curr && unlikely(rt_task(curr)) &&
+	       (curr && unlikely(rt_task(curr)) &&
 	       (curr->nr_cpus_allowed < 2 || curr->prio <= p->prio));
 
 	/*
@@ -1572,8 +1570,15 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags)
 		goto out_unlock;
 	}
 
-	if (test || !rt_task_fits_capacity(p, cpu)) {
+	if (may_not_preempt || test || !rt_task_fits_capacity(p, cpu)) {
 		int target = find_lowest_rq(p);
+
+		/*
+		 * Bail out if we were forcing a migration to find a better
+		 * fitting CPU but our search failed.
+		 */
+		if (!test && target != -1 && !rt_task_fits_capacity(p, target))
+			goto out_unlock;
 
 		/*
 		 * Check once for losing a race with the other core's irq
@@ -1587,21 +1592,14 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags)
 		}
 
 		/*
-		 * Bail out if we were forcing a migration to find a better
-		 * fitting CPU but our search failed.
-		 */
-		if (!test && target != -1 && !rt_task_fits_capacity(p, target))
-			goto out_unlock;
-
-		/*
 		 * If cpu is non-preemptible, prefer remote cpu
 		 * even if it's running a higher-prio task.
 		 * Otherwise: Don't bother moving it if the
 		 * destination CPU is not running a lower priority task.
 		 */
 		if (target != -1 &&
-		   (may_not_preempt ||
-		    p->prio < cpu_rq(target)->rt.highest_prio.curr))
+		    (may_not_preempt ||
+		     p->prio < cpu_rq(target)->rt.highest_prio.curr))
 			cpu = target;
 	}
 
