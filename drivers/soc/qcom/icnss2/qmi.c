@@ -890,7 +890,7 @@ err_send:
 		release_firmware(fw_entry);
 err_req_fw:
 	if (bdf_type != ICNSS_BDF_REGDB)
-		ICNSS_ASSERT(0);
+		ICNSS_QMI_ASSERT();
 	kfree(req);
 	kfree(resp);
 	return ret;
@@ -1143,6 +1143,10 @@ int wlfw_wlan_mode_send_sync_msg(struct icnss_priv *priv,
 	 * FW not able to process it.
 	 */
 	if (test_bit(ICNSS_PD_RESTART, &priv->state) &&
+	    mode == QMI_WLFW_OFF_V01)
+		return 0;
+
+	if (!test_bit(ICNSS_MODE_ON, &priv->state) &&
 	    mode == QMI_WLFW_OFF_V01)
 		return 0;
 
@@ -1845,6 +1849,14 @@ int wlfw_qdss_trace_mem_info_send_sync(struct icnss_priv *priv)
 	}
 
 	req->mem_seg_len = priv->qdss_mem_seg_len;
+
+	if (priv->qdss_mem_seg_len > QMI_WLFW_MAX_NUM_MEM_SEG) {
+		icnss_pr_err("Invalid seg len %u\n",
+			     priv->qdss_mem_seg_len);
+		ret = -EINVAL;
+		goto out;
+	}
+
 	for (i = 0; i < req->mem_seg_len; i++) {
 		icnss_pr_dbg("Memory for FW, va: 0x%pK, pa: %pa, size: 0x%zx, type: %u\n",
 			     qdss_mem[i].va, &qdss_mem[i].pa,
@@ -2236,6 +2248,13 @@ static void wlfw_qdss_trace_req_mem_ind_cb(struct qmi_handle *qmi,
 	}
 
 	priv->qdss_mem_seg_len = ind_msg->mem_seg_len;
+
+	if (priv->qdss_mem_seg_len > QMI_WLFW_MAX_NUM_MEM_SEG) {
+		icnss_pr_err("Invalid seg len %u\n",
+			     priv->qdss_mem_seg_len);
+		return;
+	}
+
 	for (i = 0; i < priv->qdss_mem_seg_len; i++) {
 		icnss_pr_dbg("QDSS requests for memory, size: 0x%x, type: %u\n",
 			     ind_msg->mem_seg[i].size,
@@ -2922,7 +2941,7 @@ int wlfw_host_cap_send_sync(struct icnss_priv *priv)
 	return 0;
 
 out:
-	ICNSS_ASSERT(0);
+	ICNSS_QMI_ASSERT();
 	kfree(req);
 	kfree(resp);
 	return ret;
