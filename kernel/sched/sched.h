@@ -166,20 +166,6 @@ extern void calc_global_load_tick(struct rq *this_rq);
 extern long calc_load_fold_active(struct rq *this_rq, long adjust);
 
 /*
- * Asymmetric CPU capacity bits
- */
-struct asym_cap_data {
-	struct list_head link;
-	struct rcu_head rcu;
-	unsigned long capacity;
-	unsigned long cpus[];
-};
-
-extern struct list_head asym_cap_list;
-
-#define cpu_capacity_span(asym_data) to_cpumask((asym_data)->cpus)
-
-/*
  * Helpers for converting nanosecond timing to jiffy resolution
  */
 #define NS_TO_JIFFIES(TIME)	((unsigned long)(TIME) / (NSEC_PER_SEC / HZ))
@@ -635,14 +621,15 @@ do {									\
 /* CFS-related fields in a runqueue */
 struct cfs_rq {
 	struct load_weight	load;
-	unsigned int		nr_queued;
-	unsigned int		h_nr_queued;       /* SCHED_{NORMAL,BATCH,IDLE} */
-	unsigned int		h_nr_runnable;     /* SCHED_{NORMAL,BATCH,IDLE} */
-	unsigned int		h_nr_idle; /* SCHED_IDLE */
+	unsigned int		nr_running;
+	unsigned int		h_nr_running;      /* SCHED_{NORMAL,BATCH,IDLE} */
+	unsigned int		idle_h_nr_running; /* SCHED_IDLE */
+	unsigned int		h_nr_delayed;
 
 	s64			avg_vruntime;
 	u64			avg_load;
 
+	u64			exec_clock;
 	u64			min_vruntime;
 
 	struct rb_root_cached	tasks_timeline;
@@ -653,6 +640,10 @@ struct cfs_rq {
 	 */
 	struct sched_entity	*curr;
 	struct sched_entity	*next;
+
+#ifdef	CONFIG_SCHED_DEBUG
+	unsigned int		nr_spread_over;
+#endif
 
 #ifdef CONFIG_SMP
 	/*
@@ -837,8 +828,11 @@ struct dl_rq {
 
 static inline void se_update_runnable(struct sched_entity *se)
 {
-	if (!entity_is_task(se))
-		se->runnable_weight = se->my_q->h_nr_runnable;
+	if (!entity_is_task(se)) {
+		struct cfs_rq *cfs_rq = se->my_q;
+
+		se->runnable_weight = cfs_rq->h_nr_running - cfs_rq->h_nr_delayed;
+	}
 }
 
 static inline long se_runnable(struct sched_entity *se)
@@ -1224,6 +1218,7 @@ struct rq {
 	/* latency stats */
 	struct sched_info	rq_sched_info;
 	unsigned long long	rq_cpu_time;
+	/* could above be rq->cfs_rq.exec_clock + rq->rt_rq.rt_runtime ? */
 
 	/* sys_sched_yield() stats */
 	unsigned int		yld_count;
@@ -1842,7 +1837,6 @@ static inline void set_task_rq(struct task_struct *p, unsigned int cpu)
 	set_task_rq_fair(&p->se, p->se.cfs_rq, tg->cfs_rq[cpu]);
 	p->se.cfs_rq = tg->cfs_rq[cpu];
 	p->se.parent = tg->se[cpu];
-	p->se.depth = tg->se[cpu] ? tg->se[cpu]->depth + 1 : 0;
 #endif
 
 #ifdef CONFIG_RT_GROUP_SCHED
@@ -2059,8 +2053,11 @@ struct sched_class {
 
 	void (*update_curr)(struct rq *rq);
 
+#define TASK_SET_GROUP		0
+#define TASK_MOVE_GROUP		1
+
 #ifdef CONFIG_FAIR_GROUP_SCHED
-	void (*task_change_group)(struct task_struct *p);
+	void (*task_change_group)(struct task_struct *p, int type);
 #endif
 
 #ifdef CONFIG_SCHED_WALT
@@ -2118,7 +2115,7 @@ static inline bool sched_rt_runnable(struct rq *rq)
 
 static inline bool sched_fair_runnable(struct rq *rq)
 {
-	return rq->cfs.nr_queued > 0;
+	return rq->cfs.nr_running > 0;
 }
 
 extern struct task_struct *pick_next_task_fair(struct rq *rq, struct task_struct *prev, struct rq_flags *rf);
@@ -2983,7 +2980,7 @@ static inline unsigned long cpu_util_cfs(struct rq *rq)
 
 #ifdef CONFIG_CPU_FREQ_GOV_SCHEDUTIL
 
-unsigned long effective_cpu_util(int cpu, unsigned long util_cfs,
+unsigned long schedutil_cpu_util(int cpu, unsigned long util_cfs,
 				 unsigned long *min,
 				 unsigned long *max);
 
@@ -3007,9 +3004,9 @@ static inline unsigned long cpu_util_rt(struct rq *rq)
 }
 
 #else /* CONFIG_CPU_FREQ_GOV_SCHEDUTIL */
-unsigned long effective_cpu_util(int cpu, unsigned long util_cfs,
-                                 unsigned long *min,
-                                 unsigned long *max)
+static inline unsigned long schedutil_cpu_util(int cpu, unsigned long util_cfs,
+				 unsigned long max, enum schedutil_type type,
+				 struct task_struct *p)
 {
 	return 0;
 }
@@ -3033,7 +3030,7 @@ static inline unsigned long cpu_util(int cpu)
 #ifdef CONFIG_HAVE_SCHED_AVG_IRQ
 static inline unsigned long cpu_util_irq(struct rq *rq)
 {
-	return READ_ONCE(rq->avg_irq.util_avg);
+	return rq->avg_irq.util_avg;
 }
 
 static inline
