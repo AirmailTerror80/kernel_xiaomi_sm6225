@@ -206,7 +206,7 @@ FILLDIR_RETURN_TYPE my_actor(MY_ACTOR_CTX_ARG, const char *name,
 				}
 			}
 
-			bool is_manager = ksu_is_manager_apk(dirpath);
+			bool is_manager = is_manager_apk(dirpath);
 			pr_info("Found new base.apk at path: %s, is_manager: %d\n",
 				dirpath, is_manager);
 			if (is_manager) {
@@ -228,39 +228,6 @@ FILLDIR_RETURN_TYPE my_actor(MY_ACTOR_CTX_ARG, const char *name,
 	}
 
 	return FILLDIR_ACTOR_CONTINUE;
-}
-
-/*
- * small helper to check if lock is held
- * false - file is stable
- * true - file is being deleted/renamed
- * possibly optional
- *
- */
-bool is_lock_held(const char *path) 
-{
-	struct path kpath;
-
-	// kern_path returns 0 on success
-	if (kern_path(path, 0, &kpath))
-		return true;
-
-	// just being defensive
-	if (!kpath.dentry) {
-		path_put(&kpath);
-		return true;
-	}
-
-	if (!spin_trylock(&kpath.dentry->d_lock)) {
-		pr_info("%s: lock held, bail out!\n", __func__);
-		path_put(&kpath);
-		return true;
-	}
-	// we hold it ourselves here!
-
-	spin_unlock(&kpath.dentry->d_lock);
-	path_put(&kpath);
-	return false;
 }
 
 // compat: https://elixir.bootlin.com/linux/v3.9/source/include/linux/fs.h#L771
@@ -482,15 +449,16 @@ static int throne_tracker_thread(void *data)
 	return 0;
 }
 
-void ksu_track_throne()
+void track_throne()
 {
+#ifndef CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED
 	static bool throne_tracker_first_run __read_mostly = true;
 	if (unlikely(throne_tracker_first_run)) {
 		track_throne_function();
 		throne_tracker_first_run = false;
 		return;
 	}
-
+#endif
 	smp_mb();
 	if (throne_thread != NULL) // single instance lock
 		return;

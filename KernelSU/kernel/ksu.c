@@ -13,8 +13,8 @@
 #include "ksu.h"
 #include "throne_tracker.h"
 
-#ifdef CONFIG_KSU_SUSFS
-#include <linux/susfs.h>
+#ifdef CONFIG_KPROBES
+extern void kp_ksud_init();
 #endif
 
 static struct workqueue_struct *ksu_workqueue;
@@ -80,7 +80,7 @@ bool ksu_queue_work(struct work_struct *work)
 
 #define EXTRA_FEATURES FEAT_1 FEAT_2 FEAT_3 FEAT_4 FEAT_5 FEAT_6 FEAT_7 FEAT_8 FEAT_9 FEAT_10
 
-int __init ksu_kernelsu_init(void)
+int __init kernelsu_init(void)
 {
 	pr_info("Initialized on: %s (%s) with ksuver: %s%s\n", UTS_RELEASE, UTS_MACHINE, __stringify(KSU_VERSION), EXTRA_FEATURES);
 
@@ -94,10 +94,6 @@ int __init ksu_kernelsu_init(void)
 	pr_alert("*************************************************************");
 #endif
 
-#ifdef CONFIG_KSU_SUSFS
-	susfs_init();
-#endif
-
 	ksu_core_init();
 
 	ksu_workqueue = alloc_ordered_workqueue("kernelsu_work_queue", 0);
@@ -106,10 +102,13 @@ int __init ksu_kernelsu_init(void)
 
 	ksu_throne_tracker_init();
 
+#ifdef CONFIG_KPROBES
+	kp_ksud_init();
+#endif
 	return 0;
 }
 
-void ksu_kernelsu_exit(void)
+void kernelsu_exit(void)
 {
 	ksu_allowlist_exit();
 
@@ -119,8 +118,8 @@ void ksu_kernelsu_exit(void)
 
 }
 
-module_init(ksu_kernelsu_init);
-module_exit(ksu_kernelsu_exit);
+module_init(kernelsu_init);
+module_exit(kernelsu_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("weishu");

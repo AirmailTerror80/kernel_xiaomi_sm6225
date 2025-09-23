@@ -8,6 +8,10 @@ kernelsu-objs += ksud.o
 kernelsu-objs += embed_ksud.o
 kernelsu-objs += kernel_compat.o
 
+ifeq ($(CONFIG_KPROBES),y)
+kernelsu-objs += kp_ksud.o
+endif
+
 kernelsu-objs += selinux/selinux.o
 kernelsu-objs += selinux/sepolicy.o
 kernelsu-objs += selinux/rules.o
@@ -16,7 +20,8 @@ ccflags-y += -I$(objtree)/security/selinux -include $(srctree)/include/uapi/asm-
 
 obj-$(CONFIG_KSU) += kernelsu.o
 
-ccflags-y += -DKSU_VERSION=12114
+# compliant to last upstream kernel change as of 20250922
+ccflags-y += -DKSU_VERSION=12123
 
 ifeq ($(shell grep -q " current_sid(void)" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
 ccflags-y += -DKSU_COMPAT_HAS_CURRENT_SID
@@ -87,16 +92,12 @@ $(info -- KernelSU/compat: newer kernel_write found)
 ccflags-y += -DKSU_NEW_KERNEL_WRITE
 endif
 
+ifeq ($(shell grep -q "selinux_inode" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
+$(info -- KernelSU/compat: selinux_inode() found)
+ccflags-y += -DKSU_HAS_SELINUX_INODE
+endif
+
 ccflags-y += -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat
 ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
 
-## For susfs stuff ##
-ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
-$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
-$(info )
-$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
-else
-$(info -- You have not integrate susfs in your kernel.)
-$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
-endif
 # Keep a new line here!! Because someone may append config
