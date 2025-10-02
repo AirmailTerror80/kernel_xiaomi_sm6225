@@ -51,6 +51,12 @@ static bool ksu_su_compat_enabled = true;
 extern void ksu_sucompat_init();
 extern void ksu_sucompat_exit();
 
+#ifdef CONFIG_KSU_KPROBES_KSUD
+extern void unregister_kprobe_thread();
+#else
+void unregister_kprobe_thread() {}
+#endif
+
 static inline bool is_allow_su()
 {
 	if (is_manager()) {
@@ -277,21 +283,39 @@ LSM_HANDLER_TYPE ksu_handle_prctl(int option, unsigned long arg2, unsigned long 
 {
 	// if success, we modify the arg5 as result!
 	u32 *result = (u32 *)arg5;
-	u32 reply_ok = KERNEL_SU_OPTION;
+	u32 reply_ok = KERNEL_SU_OPTION;	
 
-	if (KERNEL_SU_OPTION != option) {
-		return 0;
-	}
+	// we can skip this check when a manager is crowned already
+	if (likely(ksu_is_manager_uid_valid()))
+		goto skip_check;
 
-	// TODO: find it in throne tracker!
+	// this is mostly for that multiuser bs
+	// here we just let them suffer
 	uid_t current_uid_val = current_uid().val;
 	uid_t manager_uid = ksu_get_manager_uid();
-	if (current_uid_val != manager_uid &&
-	    current_uid_val % 100000 == manager_uid) {
-		ksu_set_manager_uid(current_uid_val);
+	if (current_uid_val != manager_uid && 
+		current_uid_val % 100000 == manager_uid) {
+			ksu_set_manager_uid(current_uid_val);
+			// make sure all cpus sees this change, next line will check
+			smp_mb();
 	}
 
-	bool from_root = 0 == current_uid().val;
+skip_check:
+	// yes this causes delay, but this keeps the delay consistent, which is what we want
+	barrier();
+	if (!is_allow_su())
+		return 0;
+
+	// we move it after uid check here so they cannot
+	// compare 0xdeadbeef call to a non-0xdeadbeef call
+	// with barriers around for safety as the compiler
+	// might try to do something smart.
+	barrier();
+	if (KERNEL_SU_OPTION != option)
+		return 0;
+
+	// just continue old logic
+	bool from_root = !current_uid().val;
 	bool from_manager = is_manager();
 
 	if (!from_root && !from_manager 
@@ -417,6 +441,7 @@ LSM_HANDLER_TYPE ksu_handle_prctl(int option, unsigned long arg2, unsigned long 
 			if (!boot_complete_lock) {
 				boot_complete_lock = true;
 				pr_info("boot_complete triggered\n");
+				unregister_kprobe_thread();
 			}
 			break;
 		}
@@ -746,27 +771,16 @@ LSM_HANDLER_TYPE ksu_inode_permission(struct inode *inode, int mask)
 }
 
 #ifdef CONFIG_COMPAT
-bool ksu_is_compat __read_mostly = false;
+extern bool ksu_is_compat __read_mostly;
 #endif
 
-int ksu_bprm_check(struct linux_binprm *bprm)
+LSM_HANDLER_TYPE ksu_bprm_check(struct linux_binprm *bprm)
 {
 	char *filename = (char *)bprm->filename;
 	
 	if (likely(!ksu_execveat_hook))
 		return 0;
 
-/*
- * 32-on-64 compat detection 
- *
- * notes:
- * bprm->buf provides the binary itself !!
- * https://unix.stackexchange.com/questions/106234/determine-if-a-specific-process-is-32-or-64-bit
- * buf[0] == 0x7f && buf[1] == 'E' &&  buf[2] == 'L' && buf[3] == 'F' 
- * so as that said, we check ELF header, then we check 5th byte, 0x01 = 32-bit, 0x02 = 64 bit
- * we only check first execution of /data/adb/ksud and while ksu_execveat_hook is open!
- * 
- */
 #ifdef CONFIG_COMPAT
 	static bool compat_check_done __read_mostly = false;
 	if ( unlikely(!compat_check_done) && unlikely(!strcmp(filename, "/data/adb/ksud"))
@@ -785,8 +799,9 @@ int ksu_bprm_check(struct linux_binprm *bprm)
 }
 
 // kernel 4.9 and older
+#ifndef CONFIG_KSU_KPROBES_KSUD
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
-int ksu_key_permission(key_ref_t key_ref, const struct cred *cred,
+LSM_HANDLER_TYPE ksu_key_permission(key_ref_t key_ref, const struct cred *cred,
 			      unsigned perm)
 {
 	if (init_session_keyring != NULL) {
@@ -801,6 +816,7 @@ int ksu_key_permission(key_ref_t key_ref, const struct cred *cred,
 	return 0;
 }
 #endif
+#endif // CONFIG_KSU_KPROBES_KSUD
 
 #ifdef CONFIG_KSU_LSM_SECURITY_HOOKS
 static int ksu_task_prctl(int option, unsigned long arg2, unsigned long arg3,
@@ -827,12 +843,12 @@ static struct security_hook_list ksu_hooks[] = {
 	LSM_HOOK_INIT(inode_rename, ksu_inode_rename),
 	LSM_HOOK_INIT(task_fix_setuid, ksu_task_fix_setuid),
 	LSM_HOOK_INIT(inode_permission, ksu_inode_permission),
-#ifndef CONFIG_KPROBES
 	LSM_HOOK_INIT(bprm_check_security, ksu_bprm_check),
+#ifndef CONFIG_KSU_KPROBES_KSUD
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
 	LSM_HOOK_INIT(key_permission, ksu_key_permission)
 #endif
-#endif // CONFIG_KPROBES
+#endif // CONFIG_KSU_KPROBES_KSUD
 };
 
 void __init ksu_lsm_hook_init(void)

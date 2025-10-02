@@ -52,4 +52,21 @@ static int iterate_dir(struct file *file, struct dir_context *ctx)
 }
 #endif // KSU_HAS_ITERATE_DIR
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 18, 0)
+__weak char *bin2hex(char *dst, const void *src, size_t count)
+{
+	const unsigned char *_src = src;
+	while (count--)
+		dst = pack_hex_byte(dst, *_src++);
+	return dst;
+}
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 3, 0)
+__weak ssize_t strscpy(char *dest, const char *src, size_t count)
+{
+    return strlcpy(dest, src, count);
+}
+#endif
+
 #endif

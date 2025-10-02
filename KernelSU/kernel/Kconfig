@@ -2,9 +2,27 @@ menu "KernelSU"
 
 config KSU
 	bool "KernelSU function support"
-	default n
+	default y
 	help
 	  Enable kernel-level root privileges on Android System.
+
+config KSU_KPROBES_KSUD
+	bool "Enable dynamic kprobes for early boot hooks"
+	depends on KPROBES
+	default y
+	help
+	  Use dynamic hooks via kprobes for functions needed only
+	  on early boot. Hooks are unregistered at boot complete
+	  to reduce overhead.
+
+config KSU_KRETPROBES_SUCOMPAT
+	bool "EXPERIMENTAL: kretprobes for sucompat"
+	depends on KRETPROBES
+	default n
+	help
+	  EXPERIMENTAL: Use kretprobes for hooking getname_flags, mainly for
+	  sucompat. This method will hijack all fs-related syscalls, but
+	  thwarts timing based detections.
 
 config KSU_DEBUG
 	bool "KernelSU debug mode"
@@ -14,7 +32,7 @@ config KSU_DEBUG
 	  Enable KernelSU debug mode.
 
 config KSU_THRONE_TRACKER_ALWAYS_THREADED
-	bool "Always run throne_tracker in a kthread"
+	bool "Always run throne tracker in a kthread"
 	default n
 	help
 	  Runs throne_tracker in a separate kthread, including the first run.
