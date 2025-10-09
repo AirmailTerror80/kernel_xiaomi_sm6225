@@ -262,16 +262,6 @@ static void nuke_ext4_sysfs(const char *custompath) {
 }
 #endif
 
-static bool is_system_bin_su()
-{
-	// YES in_execve becomes 0 when it succeeds.
-	if (!current->mm || current->in_execve) 
-		return false;
-
-	// quick af check
-	return (current->mm->exe_file && !strcmp(current->mm->exe_file->f_path.dentry->d_name.name, "su"));
-}
-
 struct mount_entry {
     char *umountable;
     struct list_head list;
@@ -283,50 +273,75 @@ LSM_HANDLER_TYPE ksu_handle_prctl(int option, unsigned long arg2, unsigned long 
 {
 	// if success, we modify the arg5 as result!
 	u32 *result = (u32 *)arg5;
-	u32 reply_ok = KERNEL_SU_OPTION;	
+	u32 reply_ok = KERNEL_SU_OPTION;
+	uid_t current_uid_val = current_uid().val;
 
-	// we can skip this check when a manager is crowned already
-	if (likely(ksu_is_manager_uid_valid()))
+	// skip this private space support if uid below 100k
+	if (current_uid_val < 100000)
 		goto skip_check;
 
-	// this is mostly for that multiuser bs
-	// here we just let them suffer
-	uid_t current_uid_val = current_uid().val;
 	uid_t manager_uid = ksu_get_manager_uid();
 	if (current_uid_val != manager_uid && 
 		current_uid_val % 100000 == manager_uid) {
 			ksu_set_manager_uid(current_uid_val);
-			// make sure all cpus sees this change, next line will check
-			smp_mb();
 	}
 
 skip_check:
 	// yes this causes delay, but this keeps the delay consistent, which is what we want
-	barrier();
+	// with a barrier for safety as the compiler might try to do something smart.
+	DONT_GET_SMART();
 	if (!is_allow_su())
 		return 0;
 
 	// we move it after uid check here so they cannot
 	// compare 0xdeadbeef call to a non-0xdeadbeef call
-	// with barriers around for safety as the compiler
-	// might try to do something smart.
-	barrier();
 	if (KERNEL_SU_OPTION != option)
 		return 0;
+
+#ifdef CONFIG_KSU_DEBUG
+	pr_info("option: 0x%x, cmd: %ld\n", option, arg2);
+#endif
+
+	if (arg2 == CMD_GRANT_ROOT) {
+		pr_info("allow root for: %d\n", current_uid().val);
+		escape_to_root();
+		if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {
+			pr_err("grant_root: prctl reply error\n");
+		}
+		return 0;
+	}
+
+	if (arg2 == CMD_ENABLE_SU) {
+		bool enabled = (arg3 != 0);
+		if (enabled == ksu_su_compat_enabled) {
+			pr_info("cmd enable su but no need to change.\n");
+			if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {// return the reply_ok directly
+				pr_err("prctl reply error, cmd: %lu\n", arg2);
+			}
+			return 0;
+		}
+
+		if (enabled) {
+			ksu_sucompat_init();
+		} else {
+			ksu_sucompat_exit();
+		}
+		ksu_su_compat_enabled = enabled;
+
+		if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {
+			pr_err("prctl reply error, cmd: %lu\n", arg2);
+		}
+		return 0;
+	}
 
 	// just continue old logic
 	bool from_root = !current_uid().val;
 	bool from_manager = is_manager();
 
-	if (!from_root && !from_manager 
-		&& !(is_allow_su() && is_system_bin_su())) {
+	if (!from_root && !from_manager) {
 		// only root or manager can access this interface
 		return 0;
 	}
-
-#ifdef CONFIG_KSU_DEBUG
-	pr_info("option: 0x%x, cmd: %ld\n", option, arg2);
-#endif
 
 	if (arg2 == CMD_ADD_TRY_UMOUNT) {
 		struct mount_entry *new_entry, *entry;
@@ -393,17 +408,6 @@ skip_check:
 				pr_err("become_manager: prctl reply error\n");
 			}
 			return 0;
-		}
-		return 0;
-	}
-
-	if (arg2 == CMD_GRANT_ROOT) {
-		if (is_allow_su()) {
-			pr_info("allow root for: %d\n", current_uid().val);
-			escape_to_root();
-			if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {
-				pr_err("grant_root: prctl reply error\n");
-			}
 		}
 		return 0;
 	}
@@ -527,29 +531,6 @@ skip_check:
 		if (copy_to_user(arg3, &manager_uid, sizeof(manager_uid))) {
 			pr_err("get manager uid failed\n");
 		}
-		if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {
-			pr_err("prctl reply error, cmd: %lu\n", arg2);
-		}
-		return 0;
-	}
-
-	if (arg2 == CMD_ENABLE_SU) {
-		bool enabled = (arg3 != 0);
-		if (enabled == ksu_su_compat_enabled) {
-			pr_info("cmd enable su but no need to change.\n");
-			if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {// return the reply_ok directly
-				pr_err("prctl reply error, cmd: %lu\n", arg2);
-			}
-			return 0;
-		}
-
-		if (enabled) {
-			ksu_sucompat_init();
-		} else {
-			ksu_sucompat_exit();
-		}
-		ksu_su_compat_enabled = enabled;
-
 		if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {
 			pr_err("prctl reply error, cmd: %lu\n", arg2);
 		}
