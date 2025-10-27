@@ -8,6 +8,10 @@ kernelsu-objs += ksud.o
 kernelsu-objs += embed_ksud.o
 kernelsu-objs += kernel_compat.o
 
+ifeq ($(CONFIG_KSU_EXTRAS),y)
+kernelsu-objs += extras.o
+endif
+
 ifeq ($(CONFIG_KSU_KPROBES_KSUD),y)
 kernelsu-objs += kp_ksud.o
 endif
@@ -24,8 +28,14 @@ ccflags-y += -I$(objtree)/security/selinux -include $(srctree)/include/uapi/asm-
 
 obj-$(CONFIG_KSU) += kernelsu.o
 
-# compliant to last upstream kernel change as of 20250925
-ccflags-y += -DKSU_VERSION=12126
+KDIR := $(KDIR)
+MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+
+$(info -- KDIR: $(KDIR))
+$(info -- MDIR: $(MDIR))
+
+# compliant to last upstream kernel change as of 20251019 - 7dd8818
+ccflags-y += -DKSU_VERSION=12131
 
 ifeq ($(shell grep -q " current_sid(void)" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
 ccflags-y += -DKSU_COMPAT_HAS_CURRENT_SID
@@ -96,12 +106,14 @@ $(info -- KernelSU/compat: newer kernel_write found)
 ccflags-y += -DKSU_NEW_KERNEL_WRITE
 endif
 
-ifeq ($(shell grep -q "selinux_inode" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
-$(info -- KernelSU/compat: selinux_inode() found)
-ccflags-y += -DKSU_HAS_SELINUX_INODE
-endif
-
 ccflags-y += -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat
 ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
+
+all:
+	make -C $(KDIR) M=$(MDIR) modules
+compdb:
+	python3 $(MDIR)/.vscode/generate_compdb.py -O $(KDIR) $(MDIR)
+clean:
+	make -C $(KDIR) M=$(MDIR) clean
 
 # Keep a new line here!! Because someone may append config

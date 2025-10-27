@@ -48,7 +48,7 @@ static void __user *userspace_stack_buffer(const void *d, size_t len)
 	
 	do {
 		p = (void __user *)(start_stack - step - len);
-		if (ksu_access_ok(p, len) && !copy_to_user(p, d, len)) {
+		if (!copy_to_user(p, d, len)) {
 			/* pr_info("%s: start_stack: %lx p: %lx len: %zu\n",
 				__func__, start_stack, (unsigned long)p, len ); */
 			return p;
@@ -239,36 +239,6 @@ int ksu_getname_flags_kernel(char **kname, int flags)
 // dummified
 int ksu_handle_devpts(struct inode *inode)
 {
-	return 0;
-}
-
-int __ksu_handle_devpts(struct inode *inode)
-{
-	DONT_GET_SMART();
-	if (!ksu_sucompat_non_kp)
-		return 0;
-
-	if (!current->mm) {
-		return 0;
-	}
-
-	uid_t uid = current_uid().val;
-	if (uid % 100000 < 10000) {
-		// not untrusted_app, ignore it
-		return 0;
-	}
-
-	if (likely(!ksu_is_allow_uid(uid)))
-		return 0;
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0) || defined(KSU_HAS_SELINUX_INODE)
-	struct inode_security_struct *sec = selinux_inode(inode);
-#else
-	struct inode_security_struct *sec = (struct inode_security_struct *)inode->i_security;
-#endif
-	if (ksu_devpts_sid && sec)
-		sec->sid = ksu_devpts_sid;
-
 	return 0;
 }
 

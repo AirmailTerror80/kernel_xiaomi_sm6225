@@ -138,7 +138,7 @@ ssize_t ksu_kernel_write_compat(struct file *p, const void *buf, size_t count,
 #endif
 }
 
-int ksu_access_ok(const void *addr, unsigned long size)
+static int ksu_access_ok(const void *addr, unsigned long size)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0)
 	return access_ok(addr, size);

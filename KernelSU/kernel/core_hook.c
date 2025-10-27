@@ -57,6 +57,16 @@ extern void unregister_kprobe_thread();
 void unregister_kprobe_thread() {}
 #endif
 
+// extras.c
+static bool ksu_avc_spoof_enabled = true;
+#ifdef CONFIG_KSU_EXTRAS
+extern void avc_spoof_init();
+extern void avc_spoof_exit();
+#else
+void avc_spoof_init() { pr_info("%s: feature not implemented!\n", __func__); }
+void avc_spoof_exit() { pr_info("%s: feature not implemented!\n", __func__); }
+#endif
+
 static inline bool is_allow_su()
 {
 	if (is_manager()) {
@@ -125,9 +135,9 @@ static void disable_seccomp()
 	// disable seccomp
 #if defined(CONFIG_GENERIC_ENTRY) &&                                           \
 	LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
-	current_thread_info()->syscall_work &= ~SYSCALL_WORK_SECCOMP;
+	clear_syscall_work(SECCOMP);
 #else
-	current_thread_info()->flags &= ~(TIF_SECCOMP | _TIF_SECCOMP);
+	clear_thread_flag(TIF_SECCOMP);
 #endif
 
 #ifdef CONFIG_SECCOMP
@@ -343,6 +353,22 @@ skip_check:
 		return 0;
 	}
 
+	if (arg2 == CMD_WIPE_UMOUNT_LIST) {
+		struct mount_entry *entry, *tmp;
+		list_for_each_entry_safe(entry, tmp, &mount_list, list) {
+			pr_info("wipe_umount_list: removing entry: %s\n", entry->umountable);
+			list_del(&entry->list);
+			kfree(entry->umountable);
+			kfree(entry);
+        	}
+		ksu_unmountable_count = 0;
+
+		if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {
+			pr_err("prctl reply error, cmd: %lu\n", arg2);
+		}
+		return 0;
+	}
+
 	if (arg2 == CMD_ADD_TRY_UMOUNT) {
 		struct mount_entry *new_entry, *entry;
 		char buf[384];
@@ -402,6 +428,27 @@ skip_check:
 		return 0;
 	}
 
+	if (arg2 == CMD_TOGGLE_AVC_SPOOF) {
+
+		pr_info("toggle_avc_spoof, cmd: %lu subcmd: %lu\n", arg2, arg3);
+
+		if (arg3 == 0) {
+			avc_spoof_exit();
+			ksu_avc_spoof_enabled = false;
+		}
+
+		if (arg3 == 1) {
+			avc_spoof_init();
+			ksu_avc_spoof_enabled = true;
+		}
+
+
+		if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {
+			pr_err("prctl reply error, cmd: %lu\n", arg2);
+		}
+		return 0;
+	}
+
 	if (arg2 == CMD_BECOME_MANAGER) {
 		if (from_manager) {
 			if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {
@@ -446,6 +493,7 @@ skip_check:
 				boot_complete_lock = true;
 				pr_info("boot_complete triggered\n");
 				unregister_kprobe_thread();
+				avc_spoof_init(); 
 			}
 			break;
 		}
@@ -585,6 +633,18 @@ skip_check:
 			pr_err("copy su compat failed\n");
 			return 0;
 		}
+		if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {
+			pr_err("prctl reply error, cmd: %lu\n", arg2);
+		}
+		return 0;
+	}
+
+	if (arg2 == CMD_IS_AVC_SPOOF_ENABLED) {
+		if (copy_to_user(arg3, &ksu_avc_spoof_enabled, sizeof(ksu_avc_spoof_enabled))) {
+			pr_err("copy avc spoof failed\n");
+			return 0;
+		}
+
 		if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {
 			pr_err("prctl reply error, cmd: %lu\n", arg2);
 		}
@@ -735,19 +795,8 @@ LSM_HANDLER_TYPE ksu_sb_mount(const char *dev_name, const struct path *path,
 	return 0;
 }
 
-#ifndef DEVPTS_SUPER_MAGIC
-#define DEVPTS_SUPER_MAGIC	0x1cd1
-#endif
-
-extern int __ksu_handle_devpts(struct inode *inode); // sucompat.c
-
 LSM_HANDLER_TYPE ksu_inode_permission(struct inode *inode, int mask)
 {
-	if (inode && inode->i_sb 
-		&& unlikely(inode->i_sb->s_magic == DEVPTS_SUPER_MAGIC)) {
-		//pr_info("%s: handling devpts for: %s \n", __func__, current->comm);
-		__ksu_handle_devpts(inode);
-	}
 	return 0;
 }
 
@@ -777,6 +826,7 @@ LSM_HANDLER_TYPE ksu_bprm_check(struct linux_binprm *bprm)
 	ksu_handle_pre_ksud(filename);
 
 	return 0;
+
 }
 
 // kernel 4.9 and older
@@ -823,7 +873,6 @@ static struct security_hook_list ksu_hooks[] = {
 	LSM_HOOK_INIT(task_prctl, ksu_task_prctl),
 	LSM_HOOK_INIT(inode_rename, ksu_inode_rename),
 	LSM_HOOK_INIT(task_fix_setuid, ksu_task_fix_setuid),
-	LSM_HOOK_INIT(inode_permission, ksu_inode_permission),
 	LSM_HOOK_INIT(bprm_check_security, ksu_bprm_check),
 #ifndef CONFIG_KSU_KPROBES_KSUD
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
