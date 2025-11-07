@@ -30,6 +30,10 @@
 #include "kernel_compat.h"
 #include "selinux/selinux.h"
 
+#ifdef CONFIG_KSU_KPROBES_KSUD
+extern void unregister_kprobe_thread();
+#endif
+
 static const char KERNEL_SU_RC[] =
 	"\n"
 
@@ -61,7 +65,7 @@ bool ksu_vfs_read_hook __read_mostly = true;
 bool ksu_execveat_hook __read_mostly = true;
 bool ksu_input_hook __read_mostly = true;
 
-u32 ksu_devpts_sid;
+u32 ksu_file_sid;
 
 void on_post_fs_data(void)
 {
@@ -75,10 +79,15 @@ void on_post_fs_data(void)
 	ksu_load_allow_list();
 	// sanity check, this may influence the performance
 	stop_input_hook();
-
-	ksu_devpts_sid = ksu_get_devpts_sid();
-	pr_info("devpts sid: %d\n", ksu_devpts_sid);
+	
+	ksu_file_sid = ksu_get_ksu_file_sid();
+	pr_info("ksu_file sid: %d\n", ksu_file_sid);
 }
+
+#if defined(CONFIG_KRETPROBES) && defined(CONFIG_KSU_KPROBES_KSUD) && \
+	LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+extern void kp_ksud_transition_routine_start();
+#endif
 
 // since _ksud handler only uses argv and envp for comparisons
 // this can probably work
@@ -167,6 +176,12 @@ int ksu_handle_bprm_ksud(const char *filename, const char *argv1, const char *en
 	}
 
 first_app_process:
+#if defined(CONFIG_KRETPROBES) && defined(CONFIG_KSU_KPROBES_KSUD) && \
+	LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+	if (init_second_stage_executed == true)
+		kp_ksud_transition_routine_start();
+#endif
+
 	if (first_app_process && !memcmp(filename, app_process, sizeof(app_process) - 1)) {
 		first_app_process = false;
 		pr_info("%s: exec app_process, /data prepared, second_stage: %d\n", __func__, init_second_stage_executed);
@@ -419,20 +434,6 @@ bool ksu_is_safe_mode()
 	return false;
 }
 
-__maybe_unused int ksu_handle_execve_ksud(const char __user *filename_user,
-			const char __user *const __user *__argv)
-{
-	return 0;
-}
-
-#if defined(CONFIG_COMPAT)
-__maybe_unused int ksu_handle_compat_execve_ksud(const char __user *filename_user,
-			const compat_uptr_t __user *__argv)
-{
-	return 0;
-}
-#endif
-
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
 #include "objsec.h" // task_security_struct
 bool is_ksu_transition(const struct task_security_struct *old_tsec,
@@ -466,6 +467,9 @@ static void stop_execve_hook()
 {
 	ksu_execveat_hook = false;
 	pr_info("stop execve_hook\n");
+#ifdef CONFIG_KSU_KPROBES_KSUD
+	unregister_kprobe_thread();
+#endif
 }
 
 static void stop_input_hook()

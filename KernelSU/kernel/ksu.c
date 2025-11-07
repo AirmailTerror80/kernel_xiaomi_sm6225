@@ -9,17 +9,17 @@
 
 #include "allowlist.h"
 #include "core_hook.h"
+#include "feature.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
 #include "throne_tracker.h"
+#include "sucompat.h"
+#include "ksud.h"
+#include "supercalls.h"
 
 #ifdef CONFIG_KSU_KPROBES_KSUD
 extern void kp_ksud_init();
 #endif
-
-#ifdef CONFIG_KSU_KRETPROBES_SUCOMPAT
-extern void rp_sucompat_init();
-#endif 
 
 static struct workqueue_struct *ksu_workqueue;
 
@@ -27,6 +27,8 @@ bool ksu_queue_work(struct work_struct *work)
 {
 	return queue_work(ksu_workqueue, work);
 }
+
+extern void ksu_supercalls_init();
 
 // track backports and other quirks here
 // ref: kernel_compat.c, Makefile
@@ -42,54 +44,53 @@ bool ksu_queue_work(struct work_struct *work)
 #else
 	#define FEAT_2 ""
 #endif
-
 #if defined(CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED)
 	#define FEAT_3 " +throne_always_threaded"
 #else
 	#define FEAT_3 ""
 #endif
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0) && !defined(CONFIG_KSU_LSM_SECURITY_HOOKS)
-	#define FEAT_4 " -lsm_hooks"
+#if defined(CONFIG_KSU_EXTRAS)
+	#define FEAT_4 " +extras"
 #else
 	#define FEAT_4 ""
 #endif
-#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0)) && defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
-	#define FEAT_5 " +allowlist_workaround"
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0) && !defined(CONFIG_KSU_LSM_SECURITY_HOOKS)
+	#define FEAT_5 " -lsm_hooks"
 #else
 	#define FEAT_5 ""
 #endif
-#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)) && defined(KSU_HAS_MODERN_EXT4)
-	#define FEAT_6 " +ext4_unregister_sysfs"
+#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0)) && defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
+	#define FEAT_6 " +allowlist_workaround"
 #else
 	#define FEAT_6 ""
 #endif
-#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)) && defined(KSU_HAS_PATH_UMOUNT)
-	#define FEAT_7 " +path_umount"
+#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)) && defined(KSU_HAS_MODERN_EXT4)
+	#define FEAT_7 " +ext4_unregister_sysfs"
 #else
 	#define FEAT_7 ""
 #endif
-#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)) && defined(KSU_COPY_FROM_USER_NOFAULT)
-	#define FEAT_8 " +copy_from_user_nofault"
+#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)) && defined(KSU_HAS_PATH_UMOUNT)
+	#define FEAT_8 " +path_umount"
 #else
 	#define FEAT_8 ""
 #endif
-#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)) && defined(KSU_PROBE_USER_READ)
-	#define FEAT_9 " +probe_user_read"
+#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)) && defined(KSU_COPY_FROM_USER_NOFAULT)
+	#define FEAT_9 " +copy_from_user_nofault"
 #else
 	#define FEAT_9 ""
 #endif
-#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)) && defined(KSU_NEW_KERNEL_READ)
-	#define FEAT_10 " +new_kernel_read"
+#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)) && defined(KSU_PROBE_USER_READ)
+	#define FEAT_10 " +probe_user_read"
 #else
 	#define FEAT_10 ""
 #endif
-#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)) && defined(KSU_NEW_KERNEL_WRITE)
-	#define FEAT_11 " +new_kernel_write"
+#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)) && defined(KSU_NEW_KERNEL_READ)
+	#define FEAT_11 " +new_kernel_read"
 #else
 	#define FEAT_11 ""
 #endif
-#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)) && defined(KSU_HAS_SELINUX_INODE)
-	#define FEAT_12 " +selinux_inode"
+#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)) && defined(KSU_NEW_KERNEL_WRITE)
+	#define FEAT_12 " +new_kernel_write"
 #else
 	#define FEAT_12 ""
 #endif
@@ -120,6 +121,10 @@ int __init kernelsu_init(void)
 	pr_alert("*************************************************************");
 #endif
 
+	ksu_feature_init();
+
+	ksu_supercalls_init();
+
 	ksu_core_init();
 
 	ksu_workqueue = alloc_ordered_workqueue("kernelsu_work_queue", 0);
@@ -128,9 +133,8 @@ int __init kernelsu_init(void)
 
 	ksu_throne_tracker_init();
 
-#ifdef CONFIG_KSU_KRETPROBES_SUCOMPAT	
-	rp_sucompat_init();
-#endif
+	ksu_sucompat_init(); // so the feature is registered
+
 #ifdef CONFIG_KSU_KPROBES_KSUD
 	kp_ksud_init();
 #endif
@@ -146,6 +150,7 @@ void kernelsu_exit(void)
 
 	destroy_workqueue(ksu_workqueue);
 
+	ksu_feature_exit();
 }
 
 module_init(kernelsu_init);
@@ -155,6 +160,9 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("weishu");
 MODULE_DESCRIPTION("Android KernelSU");
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
+MODULE_IMPORT_NS("VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver");
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
 MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
 #endif
+

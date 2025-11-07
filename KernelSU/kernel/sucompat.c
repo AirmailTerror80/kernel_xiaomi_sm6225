@@ -16,16 +16,51 @@
 
 #include "objsec.h"
 #include "allowlist.h"
+#include "feature.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksud.h"
 #include "kernel_compat.h"
+#include "sucompat.h"
 
 #define SU_PATH "/system/bin/su"
 #define SH_PATH "/system/bin/sh"
 
-extern void escape_to_root();
-
+bool ksu_su_compat_enabled __read_mostly = true;
 static bool ksu_sucompat_non_kp __read_mostly = true;
+
+static int su_compat_feature_get(u64 *value)
+{
+	*value = ksu_su_compat_enabled ? 1 : 0;
+	return 0;
+}
+
+static int su_compat_feature_set(u64 value)
+{
+	bool enable = value != 0;
+
+	if (enable == ksu_su_compat_enabled) {
+		pr_info("su_compat: no need to change\n");
+	return 0;
+	}
+
+	if (enable) {
+		ksu_sucompat_enable();
+	} else {
+		ksu_sucompat_disable();
+	}
+
+	ksu_su_compat_enabled = enable;
+	pr_info("su_compat: set to %d\n", enable);
+
+	return 0;
+}
+
+static const struct ksu_feature_handler su_compat_handler = {
+	.feature_id = KSU_FEATURE_SU_COMPAT,
+	.name = "su_compat",
+	.get_handler = su_compat_feature_get,
+	.set_handler = su_compat_feature_set,
+};
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
 static void __user *userspace_stack_buffer(const void *d, size_t len)
@@ -77,11 +112,17 @@ static char __user *ksud_user_path(void)
 __attribute__((hot, no_stack_protector))
 static __always_inline bool is_su_allowed(const void *ptr_to_check)
 {
-	DONT_GET_SMART();
+	barrier();
 	if (!ksu_sucompat_non_kp)
 		return false;
 
-	if (likely(!ksu_is_allow_uid(current_uid().val)))
+#ifdef CONFIG_SECCOMP
+	if (likely(!!current->seccomp.mode))
+		return false;
+#endif
+
+	// with seccomp check above, we can make this neutral
+	if (!ksu_is_allow_uid_for_current(current_uid().val))
 		return false;
 
 	if (unlikely(!ptr_to_check))
@@ -236,7 +277,6 @@ int ksu_getname_flags_kernel(char **kname, int flags)
 	return ksu_sucompat_kernel_common((void *)*kname, "getname_flags", !!!flags);
 }
 
-// dummified
 int ksu_handle_devpts(struct inode *inode)
 {
 	return 0;
@@ -247,21 +287,40 @@ extern void rp_sucompat_exit();
 extern void rp_sucompat_init();
 #endif
 
-// sucompat: permited process can execute 'su' to gain root access.
-void ksu_sucompat_init()
+void ksu_sucompat_enable()
 {
 #ifdef CONFIG_KSU_KRETPROBES_SUCOMPAT
 	rp_sucompat_init();
 #endif
 	ksu_sucompat_non_kp = true;
-	pr_info("ksu_sucompat_init: hooks enabled: exec, faccessat, stat, devpts\n");
+	pr_info("%s: hooks enabled: exec, faccessat, stat\n", __func__);
+
 }
 
-void ksu_sucompat_exit()
+void ksu_sucompat_disable()
 {
 #ifdef CONFIG_KSU_KRETPROBES_SUCOMPAT
 	rp_sucompat_exit();
 #endif
 	ksu_sucompat_non_kp = false;
-	pr_info("ksu_sucompat_exit: hooks disabled: exec, faccessat, stat, devpts\n");
+	pr_info("%s: hooks disabled: exec, faccessat, stat\n", __func__);
+}
+
+// sucompat: permited process can execute 'su' to gain root access.
+void ksu_sucompat_init()
+{
+	if (ksu_register_feature_handler(&su_compat_handler)) {
+		pr_err("Failed to register su_compat feature handler\n");
+	}
+	if (ksu_su_compat_enabled) {
+		ksu_sucompat_enable();
+	}
+}
+
+void ksu_sucompat_exit()
+{
+	if (ksu_su_compat_enabled) {
+		ksu_sucompat_disable();
+	}
+	ksu_unregister_feature_handler(KSU_FEATURE_SU_COMPAT);
 }

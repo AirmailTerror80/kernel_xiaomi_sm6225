@@ -202,6 +202,28 @@ static struct kprobe key_permission_kp = {
 #if defined(CONFIG_KRETPROBES) && LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
 #include "avc_ss.h"
 #include "selinux/selinux.h"
+
+static u32 init_sid = 0;
+static u32 su_sid = 0;
+
+// get sids outside of kprobe context
+static int grab_sids()
+{
+	int error = security_secctx_to_secid("u:r:init:s0", strlen("u:r:init:s0"), &init_sid);
+	if (error)
+		return 1;
+
+	pr_info("kp_ksud/grab_sids: got init sid: %d\n", init_sid);
+
+	error = security_secctx_to_secid("u:r:su:s0", strlen("u:r:su:s0"), &su_sid);
+	if (error)
+		return 1;
+
+	pr_info("kp_ksud/grab_sids: got su sid: %d\n", su_sid);
+	
+	return 0;
+}
+
 // int security_bounded_transition(u32 old_sid, u32 new_sid)
 static int bounded_transition_entry_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
@@ -218,28 +240,13 @@ static int bounded_transition_ret_handler(struct kretprobe_instance *ri, struct 
 	u32 old_sid = sid[0];
 	u32 new_sid = sid[1];
 
-	u32 init_sid, su_sid;
-	int error;
-
 	if (!ss_initialized)
 		return 0;
-
-	error = security_secctx_to_secid("u:r:init:s0", strlen("u:r:init:s0"), &init_sid);
-	if (error) {
-		pr_info("kp_ksud: cannot get sid of init context, err %d\n", error);
-		return 0;
-	}
-
-	error = security_secctx_to_secid("u:r:su:s0", strlen("u:r:su:s0"), &su_sid);
-	if (error) {
-		pr_info("kp_ksud: cannot get sid of su context, err %d\n", error);
-		return 0;
-	}
 
 	// so if old sid is 'init' and trying to transition to a new sid of 'su'
 	// force the function to return 0 
 	if (old_sid == init_sid && new_sid == su_sid) {
-		pr_info("kp_ksud: security_bounded_transition: allowing init -> su\n");
+		pr_info("kp_ksud: security_bounded_transition: allowing init (%d) -> su (%d)\n", init_sid, su_sid);
 		PT_REGS_RC(regs) = 0;  // make the original func return 0
 	}
 
@@ -253,7 +260,48 @@ static struct kretprobe bounded_transition_rp = {
 	.data_size = sizeof(u32) * 2, // need to keep 2x u32's, one per sid
 	.maxactive = 20,
 };
+
+// unused for now 
+void kp_ksud_transition_routine_end()
+{
+	unregister_kretprobe(&bounded_transition_rp);
+	pr_info("kp_ksud: unregister kretprobe: security_bounded_transition ret: ??\n");
+}
+
+void kp_ksud_transition_routine_start()
+{
+	// we only need to run this once.
+	// once we got sids, we are ready
+	if (su_sid != 0)
+		return;
+
+	int ret = grab_sids();
+	if (ret)
+		return;
+	
+	ret = register_kretprobe(&bounded_transition_rp);
+	pr_info("kp_ksud: register kretprobe: security_bounded_transition ret: %d\n", ret);
+}
 #endif // security_bounded_transition
+
+// sys_reboot
+extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);
+
+static int sys_reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+	struct pt_regs *real_regs = PT_REAL_REGS(regs);
+	int magic1 = (int)PT_REGS_PARM1(real_regs);
+	int magic2 = (int)PT_REGS_PARM2(real_regs);
+	int cmd = (int)PT_REGS_PARM3(real_regs);
+	void __user **arg = (void __user **)&PT_REGS_SYSCALL_PARM4(real_regs);
+
+	return ksu_handle_sys_reboot(magic1, magic2, cmd, arg);
+}
+
+static struct kprobe sys_reboot_kp = {
+	.symbol_name = SYS_REBOOT_SYMBOL,
+	.pre_handler = sys_reboot_handler_pre,
+};
 
 static void unregister_kprobe_logged(struct kprobe *kp)
 {
@@ -270,17 +318,12 @@ static int unregister_kprobe_function(void *data)
 {
 	pr_info("kp_ksud: unregistering kprobes...\n");
 
-#if defined(CONFIG_KRETPROBES) && LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
-	unregister_kretprobe(&bounded_transition_rp);
-	pr_info("kp_ksud: unregister kretprobe: security_bounded_transition ret: ??\n");
-#endif
-
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
 	unregister_kprobe_logged(&key_permission_kp);
 #endif
 
 	unregister_kprobe_logged(&input_event_kp);
-	//unregister_kprobe_logged(&sys_execve_kp);
+	// unregister_kprobe_logged(&sys_execve_kp);
 	unregister_kprobe_logged(&vfs_read_kp);
 	
 	return 0;
@@ -305,16 +348,14 @@ static void register_kprobe_logged(struct kprobe *kp)
 
 void kp_ksud_init()
 {
+	// dont unreg this one
+	register_kprobe_logged(&sys_reboot_kp);
+
 	register_kprobe_logged(&vfs_read_kp);
 	register_kprobe_logged(&input_event_kp);
-	//register_kprobe_logged(&sys_execve_kp);
+	// register_kprobe_logged(&sys_execve_kp);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
 	register_kprobe_logged(&key_permission_kp);
-#endif
-
-#if defined(CONFIG_KRETPROBES) && LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
-	int ret = register_kretprobe(&bounded_transition_rp);
-	pr_info("kp_ksud: register kretprobe: security_bounded_transition ret: %d\n", ret);
 #endif
 }
