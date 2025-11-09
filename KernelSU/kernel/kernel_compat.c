@@ -156,7 +156,8 @@ long ksu_copy_from_user_nofault(void *dst, const void __user *src, size_t size)
 	return copy_from_user_nofault(dst, src, size);
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0) || defined(KSU_PROBE_USER_READ)
 	return probe_user_read(dst, src, size);
-#else // https://elixir.bootlin.com/linux/v5.8/source/mm/maccess.c#L205
+#else 
+	// https://elixir.bootlin.com/linux/v5.8/source/mm/maccess.c#L205
 	long ret = -EFAULT;
 	mm_segment_t old_fs = get_fs();
 

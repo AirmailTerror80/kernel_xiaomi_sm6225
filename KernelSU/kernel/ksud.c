@@ -17,6 +17,7 @@
 #include <linux/printk.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
+#include <linux/namei.h>
 #include <linux/workqueue.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 #include <linux/sched/signal.h> /* fatal_signal_pending */
@@ -29,6 +30,15 @@
 #include "ksud.h"
 #include "kernel_compat.h"
 #include "selinux/selinux.h"
+
+bool ksu_module_mounted __read_mostly = false;
+bool ksu_boot_completed __read_mostly = false;
+
+#ifdef CONFIG_KSU_EXTRAS
+extern void ksu_avc_spoof_init();
+#else
+void ksu_avc_spoof_init() {}
+#endif
 
 #ifdef CONFIG_KSU_KPROBES_KSUD
 extern void unregister_kprobe_thread();
@@ -79,9 +89,49 @@ void on_post_fs_data(void)
 	ksu_load_allow_list();
 	// sanity check, this may influence the performance
 	stop_input_hook();
-	
+
 	ksu_file_sid = ksu_get_ksu_file_sid();
 	pr_info("ksu_file sid: %d\n", ksu_file_sid);
+}
+
+#if defined(CONFIG_EXT4_FS) && ( LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0) || defined(KSU_HAS_MODERN_EXT4) )
+extern void ext4_unregister_sysfs(struct super_block *sb);
+void nuke_ext4_sysfs(const char *custompath)
+{
+	struct path path;
+	int err = kern_path(custompath, 0, &path);
+	if (err) {
+		pr_err("nuke path err: %d\n", err);
+		return;
+	}
+
+	struct super_block *sb = path.dentry->d_inode->i_sb;
+	const char *name = sb->s_type->name;
+	if (strcmp(name, "ext4") != 0) {
+		pr_info("nuke but module aren't mounted\n");
+		path_put(&path);
+		return;
+	}
+
+	ext4_unregister_sysfs(sb);
+	path_put(&path);
+}
+#else
+void nuke_ext4_sysfs(const char *custompath) {
+	pr_info("%s: feature not implemented!\n", __func__);
+}
+#endif
+
+void on_module_mounted(void){
+	pr_info("on_module_mounted!\n");
+	ksu_module_mounted = true;
+	nuke_ext4_sysfs("/data/adb/modules");
+}
+
+void on_boot_completed(void){
+	ksu_boot_completed = true;
+	pr_info("on_boot_completed!\n");
+	ksu_avc_spoof_init(); 
 }
 
 #if defined(CONFIG_KRETPROBES) && defined(CONFIG_KSU_KPROBES_KSUD) && \

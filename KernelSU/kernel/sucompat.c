@@ -14,19 +14,19 @@
 #include <linux/sched.h>
 #endif
 
-#include "objsec.h"
 #include "allowlist.h"
 #include "feature.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksud.h"
 #include "kernel_compat.h"
 #include "sucompat.h"
+#include "app_profile.h"
 
 #define SU_PATH "/system/bin/su"
 #define SH_PATH "/system/bin/sh"
 
 bool ksu_su_compat_enabled __read_mostly = true;
-static bool ksu_sucompat_non_kp __read_mostly = true;
+static bool ksu_sucompat_enabled __read_mostly = true;
 
 static int su_compat_feature_get(u64 *value)
 {
@@ -113,7 +113,7 @@ __attribute__((hot, no_stack_protector))
 static __always_inline bool is_su_allowed(const void *ptr_to_check)
 {
 	barrier();
-	if (!ksu_sucompat_non_kp)
+	if (!ksu_sucompat_enabled)
 		return false;
 
 #ifdef CONFIG_SECCOMP
@@ -149,7 +149,7 @@ static int ksu_sucompat_user_common(const char __user **filename_user,
 	if (escalate) {
 		pr_info("%s su found\n", syscall_name);
 		*filename_user = ksud_user_path();
-		escape_to_root(); // escalate !!
+		escape_with_root_profile(); // escalate !!
 	} else {
 		pr_info("%s su->sh!\n", syscall_name);
 		*filename_user = sh_user_path();
@@ -209,7 +209,7 @@ static int ksu_sucompat_kernel_common(void *filename_ptr, const char *function_n
 	if (escalate) {
 		pr_info("%s su found\n", function_name);
 		memcpy(filename_ptr, KSUD_PATH, sizeof(KSUD_PATH));
-		escape_to_root();
+		escape_with_root_profile();
 	} else {
 		pr_info("%s su->sh\n", function_name);
 		memcpy(filename_ptr, SH_PATH, sizeof(SH_PATH));
@@ -277,11 +277,6 @@ int ksu_getname_flags_kernel(char **kname, int flags)
 	return ksu_sucompat_kernel_common((void *)*kname, "getname_flags", !!!flags);
 }
 
-int ksu_handle_devpts(struct inode *inode)
-{
-	return 0;
-}
-
 #ifdef CONFIG_KSU_KRETPROBES_SUCOMPAT
 extern void rp_sucompat_exit();
 extern void rp_sucompat_init();
@@ -292,9 +287,8 @@ void ksu_sucompat_enable()
 #ifdef CONFIG_KSU_KRETPROBES_SUCOMPAT
 	rp_sucompat_init();
 #endif
-	ksu_sucompat_non_kp = true;
+	ksu_sucompat_enabled = true;
 	pr_info("%s: hooks enabled: exec, faccessat, stat\n", __func__);
-
 }
 
 void ksu_sucompat_disable()
@@ -302,7 +296,7 @@ void ksu_sucompat_disable()
 #ifdef CONFIG_KSU_KRETPROBES_SUCOMPAT
 	rp_sucompat_exit();
 #endif
-	ksu_sucompat_non_kp = false;
+	ksu_sucompat_enabled = false;
 	pr_info("%s: hooks disabled: exec, faccessat, stat\n", __func__);
 }
 
