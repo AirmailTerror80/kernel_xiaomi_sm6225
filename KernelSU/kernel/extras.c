@@ -12,7 +12,7 @@
 // - xx, 20251019
 
 static u32 su_sid = 0;
-static u32 kernel_sid = 0;
+static u32 priv_app = 0;
 
 // init as disabled by default
 static atomic_t disable_spoof = ATOMIC_INIT(1);
@@ -70,12 +70,12 @@ static int get_sid()
 	}
 	pr_info("avc_spoof/get_sid: su_sid: %u\n", su_sid);
 
-	err = security_secctx_to_secid("u:r:kernel:s0", strlen("u:r:kernel:s0"), &kernel_sid);
+	err = security_secctx_to_secid("u:r:priv_app:s0", strlen("u:r:priv_app:s0"), &priv_app);
 	if (err) {
-		pr_info("avc_spoof/get_sid: kernel_sid not found!\n");
+		pr_info("avc_spoof/get_sid: priv_app not found!\n");
 		return -1;
 	}
-	pr_info("avc_spoof/get_sid: kernel_sid: %u\n", kernel_sid);
+	pr_info("avc_spoof/get_sid: priv_app: %u\n", priv_app);
 	return 0;
 }
 
@@ -87,8 +87,8 @@ int ksu_handle_slow_avc_audit(u32 *tsid)
 	// if tsid is su, we just replace it
 	// unsure if its enough, but this is how it is aye?
 	if (*tsid == su_sid) {
-		pr_info("avc_spoof/slow_avc_audit: replacing su_sid: %u with kernel_sid: %u\n", su_sid, kernel_sid);
-		*tsid = kernel_sid;
+		pr_info("avc_spoof/slow_avc_audit: replacing su_sid: %u with priv_app: %u\n", su_sid, priv_app);
+		*tsid = priv_app;
 	}
 
 	return 0;
@@ -118,11 +118,13 @@ static int slow_avc_audit_pre_handler(struct kprobe *p, struct pt_regs *regs)
 	 * changes abi (tsid in arg2 vs arg3)
 	 * lets just pass both to the handler
 	 */
+	
+	u32 *tsid;
 
-	u32 *tsid = (u32 *)&PT_REGS_PARM2(regs);
+	tsid = (u32 *)&PT_REGS_PARM2(regs);
 	ksu_handle_slow_avc_audit(tsid);
 
-	*tsid = (u32 *)&PT_REGS_PARM3(regs);
+	tsid = (u32 *)&PT_REGS_PARM3(regs);
 	ksu_handle_slow_avc_audit(tsid);
 
 	return 0;
@@ -187,15 +189,17 @@ void ksu_avc_spoof_enable(void)
 	pr_info("avc_spoof/init: slow_avc_audit spoofing enabled!\n");
 }
 
-void ksu_avc_spoof_init()
+void ksu_avc_spoof_late_init()
 {
 	boot_completed = true;
 	
 	if (ksu_avc_spoof_enabled) {
 		ksu_avc_spoof_enable();
 	}
+}
 
-
+void ksu_avc_spoof_init()
+{
 	if (ksu_register_feature_handler(&avc_spoof_handler)) {
 		pr_err("Failed to register avc spoof feature handler\n");
 	}

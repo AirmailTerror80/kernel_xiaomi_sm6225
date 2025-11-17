@@ -110,7 +110,7 @@ struct apk_path_hash {
 	struct list_head list;
 };
 
-static struct list_head apk_path_hash_list = LIST_HEAD_INIT(apk_path_hash_list);
+static struct list_head apk_path_hash_list;
 
 struct my_dir_context {
 	struct dir_context ctx;
@@ -178,7 +178,7 @@ FILLDIR_RETURN_TYPE my_actor(MY_ACTOR_CTX_ARG, const char *name,
 
 	if (d_type == DT_DIR && my_ctx->depth > 0 &&
 	    (my_ctx->stop && !*my_ctx->stop)) {
-		struct data_path *data = kmalloc(sizeof(struct data_path), GFP_ATOMIC);
+		struct data_path *data = kzalloc(sizeof(struct data_path), GFP_ATOMIC);
 
 		if (!data) {
 			pr_err("Failed to allocate memory for %s\n", dirpath);
@@ -216,7 +216,7 @@ FILLDIR_RETURN_TYPE my_actor(MY_ACTOR_CTX_ARG, const char *name,
 					kfree(pos);
 				}
 			} else {
-				struct apk_path_hash *apk_data = kmalloc(sizeof(struct apk_path_hash), GFP_ATOMIC);
+				struct apk_path_hash *apk_data = kzalloc(sizeof(struct apk_path_hash), GFP_ATOMIC);
 				apk_data->hash = hash;
 				apk_data->exists = true;
 				list_add_tail(&apk_data->list, &apk_path_hash_list);
@@ -239,6 +239,7 @@ void search_manager(const char *path, int depth, struct list_head *uid_data)
 	int i, stop = 0;
 	struct list_head data_path_list;
 	INIT_LIST_HEAD(&data_path_list);
+	INIT_LIST_HEAD(&apk_path_hash_list);
 	unsigned long data_app_magic = 0;
 	
 	// Initialize APK cache list
@@ -325,7 +326,7 @@ static bool is_uid_exist(uid_t uid, char *package, void *data)
 	return exist;
 }
 
-static void track_throne_function()
+static void throne_tracker_fn(bool prune_only)
 {
 	struct file *fp;
 	int tries = 0;
@@ -398,6 +399,9 @@ static void track_throne_function()
 	struct uid_data *np;
 	struct uid_data *n;
 
+	if (prune_only)
+		goto prune;
+
 	// first, check if manager_uid exist!
 	bool manager_exist = false;
 	list_for_each_entry (np, &uid_list, list) {
@@ -434,20 +438,23 @@ out:
 
 static int throne_tracker_thread(void *data)
 {
-	pr_info("%s: pid: %d started\n", __func__, current->pid);
-	track_throne_function();
+	// now de-void it here
+	bool prune_only = (bool)data;
+
+	pr_info("throne_tracker: pid: %d started\n", current->pid);
+	throne_tracker_fn(prune_only);
 	throne_thread = NULL;
 	smp_mb();
-	pr_info("%s: pid: %d exit!\n", __func__, current->pid);
+	pr_info("throne_tracker: pid: %d exit!\n", current->pid);
 	return 0;
 }
 
-void track_throne()
+void track_throne(bool prune_only)
 {
 #ifndef CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED
 	static bool throne_tracker_first_run __read_mostly = true;
 	if (unlikely(throne_tracker_first_run)) {
-		track_throne_function();
+		throne_tracker_fn(prune_only);
 		throne_tracker_first_run = false;
 		return;
 	}
@@ -456,7 +463,12 @@ void track_throne()
 	if (throne_thread != NULL) // single instance lock
 		return;
 
-	throne_thread = kthread_run(throne_tracker_thread, NULL, "throne_tracker");
+	// HACK: force cast prune_only to be a void *
+	// this way we won't need to create a struct.
+	// there is only one argument anyway for track_throne()
+	// so yes, true or false is now a void pointer.
+	// reality is what I want to be.
+	throne_thread = kthread_run(throne_tracker_thread, (void *)prune_only, "throne_tracker");
 	if (IS_ERR(throne_thread)) {
 		throne_thread = NULL;
 		return;

@@ -2,9 +2,11 @@
 #include <linux/capability.h>
 #include <linux/cred.h>
 #include <linux/err.h>
+#include <linux/fdtable.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
+#include <linux/syscalls.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
 
@@ -15,7 +17,9 @@
 #endif
 
 #include "supercalls.h"
+#include "arch.h"
 #include "allowlist.h"
+#include "core_hook.h"
 #include "feature.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
@@ -330,7 +334,7 @@ static int do_set_feature(void __user *arg)
 
 static int do_get_wrapper_fd(void __user *arg) {
 	if (!ksu_file_sid) {
-		return -1;
+		return -EINVAL;
 	}
 
 	struct ksu_get_wrapper_fd_cmd cmd;
@@ -365,11 +369,9 @@ static int do_get_wrapper_fd(void __user *arg) {
 	struct file* pf = fget(ret);
 
 	struct inode* wrapper_inode = file_inode(pf);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0) || defined(KSU_HAS_SELINUX_INODE)
+	// copy original inode mode
+	wrapper_inode->i_mode = file_inode(f)->i_mode;
 	struct inode_security_struct *sec = selinux_inode(wrapper_inode);
-#else
-	struct inode_security_struct *sec = (struct inode_security_struct *)wrapper_inode->i_security;
-#endif
 	if (sec) {
 		sec->sid = ksu_file_sid;
 	}
@@ -384,9 +386,202 @@ put_orig_file:
 	return ret;
 }
 
+// Get task mark status
+// Returns: 1 if marked, 0 if not marked, -ESRCH if task not found
+/* BRICKPORT: on this one we return 1 if seccomp is disabled and 0 if enabled */
+static int ksu_get_task_mark(pid_t pid)
+{
+	struct task_struct *task;
+	int ret = -ESRCH;
+
+#ifdef CONFIG_SECCOMP
+	rcu_read_lock();
+	task = find_task_by_vpid(pid);
+	if (!task) {
+		rcu_read_unlock();
+		return ret;	
+	}
+
+	ret = !task->seccomp.mode;
+	rcu_read_unlock();
+#endif // its useless to do all these when seccomp is NOT even compiled.
+
+	return ret;
+}
+
 static int do_manage_mark(void __user *arg)
 {
-	// not implemented here!
+	struct ksu_manage_mark_cmd cmd;
+	int ret = 0;
+
+	if (copy_from_user(&cmd, arg, sizeof(cmd))) {
+		pr_err("manage_mark: copy_from_user failed\n");
+		return -EFAULT;
+	}
+
+	switch (cmd.operation) {
+		case KSU_MARK_GET: {
+			// on this one, we return seccomp status of a pid instead
+			// at the very least we have partial featureset
+			ret = ksu_get_task_mark(cmd.pid);
+			if (ret < 0) {
+			    pr_err("manage_mark: get failed for pid %d: %d\n", cmd.pid, ret);
+			    return ret;
+			}
+			cmd.result = (u32)ret;
+			break;
+		}
+#if 0 // TODO: revisit this sometime
+		case KSU_MARK_MARK: { break; }
+		case KSU_MARK_UNMARK: { break; }
+		case KSU_MARK_REFRESH: { break; }
+#endif
+		default: {
+			pr_err("manage_mark: invalid operation %u\n", cmd.operation);
+			return -EINVAL;
+		}
+	}
+
+	if (copy_to_user(arg, &cmd, sizeof(cmd))) {
+		pr_err("manage_mark: copy_to_user failed\n");
+		return -EFAULT;
+	}
+
+
+	return 0;
+}
+static int do_nuke_ext4_sysfs(void __user *arg)
+{
+	struct ksu_nuke_ext4_sysfs_cmd cmd;
+	char mnt[256];
+	long ret;
+
+	if (copy_from_user(&cmd, arg, sizeof(cmd)))
+		return -EFAULT;
+
+	if (!cmd.arg)
+		return -EINVAL;
+
+	memset(mnt, 0, sizeof(mnt));
+
+	ret = strncpy_from_user(mnt, cmd.arg, sizeof(mnt));
+	if (ret < 0) {
+		pr_err("nuke ext4 copy mnt failed: %ld\\n", ret);
+		return -EFAULT;   // 或者 return ret;
+	}
+
+	if (ret == sizeof(mnt)) {
+		pr_err("nuke ext4 mnt path too long\\n");
+		return -ENAMETOOLONG;
+	}
+
+	pr_info("do_nuke_ext4_sysfs: %s\n", mnt);
+
+	return nuke_ext4_sysfs(mnt);
+}
+
+struct list_head mount_list = LIST_HEAD_INIT(mount_list);
+DECLARE_RWSEM(mount_list_lock);
+
+static int add_try_umount(void __user *arg)
+{
+	struct mount_entry *new_entry, *entry, *tmp;
+	struct ksu_add_try_umount_cmd cmd;
+	char buf[256] = {0};
+
+	if (copy_from_user(&cmd, arg, sizeof cmd))
+		return -EFAULT;
+
+	switch (cmd.mode) {
+		case KSU_UMOUNT_WIPE: {
+			struct mount_entry *entry, *tmp;
+			down_write(&mount_list_lock);
+			list_for_each_entry_safe(entry, tmp, &mount_list, list) {
+				pr_info("wipe_umount_list: removing entry: %s\n", entry->umountable);
+				list_del(&entry->list);
+				kfree(entry->umountable);
+				kfree(entry);
+			}
+			up_write(&mount_list_lock);
+
+			return 0;
+		}
+
+		case KSU_UMOUNT_ADD: {
+			long len = strncpy_from_user(buf, (const char __user *)cmd.arg, 256);
+			if (len <= 0)
+				return -EFAULT;	
+			
+			buf[sizeof(buf) - 1] = '\0';
+
+			new_entry = kzalloc(sizeof(*new_entry), GFP_KERNEL);
+			if (!new_entry)
+				return -ENOMEM;
+
+			new_entry->umountable = kstrdup(buf, GFP_KERNEL);
+			if (!new_entry->umountable) {
+				kfree(new_entry);
+				return -1;
+			}
+
+			down_write(&mount_list_lock);
+
+			// disallow dupes
+			// if this gets too many, we can consider moving this whole task to a kthread
+			list_for_each_entry(entry, &mount_list, list) {
+				if (!strcmp(entry->umountable, buf)) {
+					pr_info("cmd_add_try_umount: %s is already here!\n", buf);
+					up_write(&mount_list_lock);
+					kfree(new_entry->umountable);
+					kfree(new_entry);
+					return -1;
+				}
+			}
+
+			// now check flags and add
+			// this also serves as a null check
+			if (cmd.flags)
+				new_entry->flags = cmd.flags;
+			else
+				new_entry->flags = 0;
+
+			// debug
+			list_add(&new_entry->list, &mount_list);
+			up_write(&mount_list_lock);
+			pr_info("cmd_add_try_umount: %s added!\n", buf);
+
+			return 0;
+		}
+
+		// this is just strcmp'd wipe anyway
+		case KSU_UMOUNT_DEL: {
+			long len = strncpy_from_user(buf, (const char __user *)cmd.arg, sizeof(buf) - 1);
+			if (len <= 0)
+				return -EFAULT;
+			
+			buf[sizeof(buf) - 1] = '\0';
+
+			down_write(&mount_list_lock);
+			list_for_each_entry_safe(entry, tmp, &mount_list, list) {
+				if (!strcmp(entry->umountable, buf)) {
+					pr_info("cmd_add_try_umount: entry removed: %s\n", entry->umountable);
+					list_del(&entry->list);
+					kfree(entry->umountable);
+					kfree(entry);
+				}
+			}
+			up_write(&mount_list_lock);
+			
+			return 0;
+		}
+		
+		default: {
+			pr_err("cmd_add_try_umount: invalid operation %u\n", cmd.mode);
+			return -EINVAL;
+		}
+
+	} // switch(cmd.mode)
+	
 	return 0;
 }
 
@@ -408,10 +603,66 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
 	{ .cmd = KSU_IOCTL_SET_FEATURE, .name = "SET_FEATURE", .handler = do_set_feature, .perm_check = manager_or_root },
 	{ .cmd = KSU_IOCTL_GET_WRAPPER_FD, .name = "GET_WRAPPER_FD", .handler = do_get_wrapper_fd, .perm_check = manager_or_root },
 	{ .cmd = KSU_IOCTL_MANAGE_MARK, .name = "MANAGE_MARK", .handler = do_manage_mark, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_NUKE_EXT4_SYSFS, .name = "NUKE_EXT4_SYSFS", .handler = do_nuke_ext4_sysfs, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_ADD_TRY_UMOUNT, .name = "ADD_TRY_UMOUNT", .handler = add_try_umount, .perm_check = manager_or_root },
 	{ .cmd = 0, .name = NULL, .handler = NULL, .perm_check = NULL } // Sentinel
 };
 
-struct list_head mount_list = LIST_HEAD_INIT(mount_list);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0)
+#include <linux/task_work.h>
+#include <linux/fdtable.h>
+
+struct ksu_install_fd_tw {
+	struct callback_head cb;
+	int __user *outp;
+};
+
+static void ksu_install_fd_tw_func(struct callback_head *cb)
+{
+	struct ksu_install_fd_tw *tw = container_of(cb, struct ksu_install_fd_tw, cb);
+	int fd = ksu_install_fd();
+	pr_info("[%d] install ksu fd: %d\n", current->pid, fd);
+
+	if (copy_to_user(tw->outp, &fd, sizeof(fd))) {
+		pr_err("install ksu fd reply err\n");
+		close_fd(fd);
+	}
+
+	kfree(tw);
+}
+
+static int ksu_handle_fd_request(void __user *arg4)
+{
+	struct ksu_install_fd_tw *tw;
+
+	tw = kzalloc(sizeof(*tw), GFP_ATOMIC);
+	if (!tw)
+		return 0;
+
+	tw->outp = (int __user *)arg4;
+	tw->cb.func = ksu_install_fd_tw_func;
+
+	if (task_work_add(current, &tw->cb, TWA_RESUME)) {
+		kfree(tw);
+		pr_warn("install fd add task_work failed\n");
+	}
+
+	return 0;
+}
+#else
+static int ksu_handle_fd_request(void __user *arg4)
+{
+	int fd = ksu_install_fd();
+	pr_info("[%d] install ksu fd: %d\n", current->pid, fd);
+
+	if (copy_to_user(arg4, &fd, sizeof(fd))) {
+		pr_err("install ksu fd reply err\n");
+		close_fd(fd);
+	}
+
+	return 0;
+}
+#endif
 
 // downstream: make sure to pass arg as reference, this can allow us to extend things.
 int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg)
@@ -422,98 +673,19 @@ int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user 
 
 	pr_info("sys_reboot: intercepted call! magic: 0x%x id: %d\n", magic1, magic2);
 
+	// arg4 = (unsigned long)PT_REGS_SYSCALL_PARM4(real_regs);
+	// downstream: dereference arg as arg4 so we can be inline to upstream
+	void __user *arg4 = (void __user *)*arg;
+
 	// Check if this is a request to install KSU fd
 	if (magic2 == KSU_INSTALL_MAGIC2) {
-		int fd = ksu_install_fd();
-		pr_info("[%d] install ksu fd: %d\n", current->pid, fd);
-
-		// downstream: dereference all arg usage!
-		if (copy_to_user((void __user *)*arg, &fd, sizeof(fd))) {
-			pr_err("install ksu fd reply err\n");
-		}
-
-		return 0;
+		return ksu_handle_fd_request(arg4);
 	}
 
 	// grab a copy as we write the pointer on the pointer
-	// https://wiki.c2.com/?ThreeStarProgrammer 
-	// keks, greetings to #c on libera
-	u64 reply = (u64)*arg;
-
+	// u64 reply = (u64)*arg;	
 	// extensions
-	if (magic2 == CMD_WIPE_UMOUNT_LIST) {
-		struct mount_entry *entry, *tmp;
-		list_for_each_entry_safe(entry, tmp, &mount_list, list) {
-			pr_info("wipe_umount_list: removing entry: %s\n", entry->umountable);
-			list_del(&entry->list);
-			kfree(entry->umountable);
-			kfree(entry);
-        	}
 
-		if (copy_to_user((void __user *)*arg, &reply, sizeof(reply))) {
-			pr_err("sys_reboot reply error, cmd: %d\n", magic2);
-		}
-		return 0;
-	}
-
-	if (magic2 == CMD_ADD_TRY_UMOUNT) {
-		struct mount_entry *new_entry, *entry;
-		char buf[384] = {0};
-
-		if (copy_from_user(buf, (const char __user *)*arg, sizeof(buf) - 1)) {
-			pr_err("cmd_add_try_umount: failed to copy user string\n");
-			return 0;
-		}
-		buf[384 - 1] = '\0';
-
-		new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
-		if (!new_entry)
-			return 0;
-
-		new_entry->umountable = kstrdup(buf, GFP_KERNEL);
-		if (!new_entry->umountable) {
-			kfree(new_entry);
-			return 0;
-		}
-
-		// disallow dupes
-		// if this gets too many, we can consider moving this whole task to a kthread
-		list_for_each_entry(entry, &mount_list, list) {
-			if (!strcmp(entry->umountable, buf)) {
-				pr_info("cmd_add_try_umount: %s is already here!\n", buf);
-				kfree(new_entry->umountable);
-				kfree(new_entry);
-				return 0;
-			}	
-		}	
-
-		// debug
-		// pr_info("cmd_add_try_umount: %s added!\n", buf);
-		list_add(&new_entry->list, &mount_list);
-
-		if (copy_to_user((void __user *)*arg, &reply, sizeof(reply))) {
-			pr_err("sys_reboot reply error, cmd: %d\n", magic2);
-		}
-		return 0;
-	}
-
-	if (magic2 == CMD_NUKE_EXT4_SYSFS) {
-		char buf[384] = {0};
-
-		if (copy_from_user(buf, (const char __user *)*arg, sizeof(buf) - 1)) {
-			pr_err("cmd_nuke_ext4_sysfs: failed to copy user string\n");
-			return 0;
-		}
-		buf[384 - 1] = '\0';
-
-		nuke_ext4_sysfs(buf);
-
-		if (copy_to_user((void __user *)*arg, &reply, sizeof(reply))) {
-			pr_err("sys_reboot reply error, cmd: %d\n", magic2);
-		}
-
-		return 0;
-	}
 	return 0;
 }
 

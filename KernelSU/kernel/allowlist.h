@@ -2,13 +2,18 @@
 #define __KSU_H_ALLOWLIST
 
 #include <linux/types.h>
+#include <linux/uidgid.h>
 #include "app_profile.h"
+
+#define PER_USER_RANGE 100000
+#define FIRST_APPLICATION_UID 10000
+#define LAST_APPLICATION_UID 19999
 
 void ksu_allowlist_init(void);
 
 void ksu_allowlist_exit(void);
 
-bool ksu_load_allow_list(void);
+void ksu_load_allow_list(void);
 
 void ksu_show_allow_list(void);
 
@@ -29,4 +34,23 @@ bool ksu_set_app_profile(struct app_profile *, bool persist);
 
 bool ksu_uid_should_umount(uid_t uid);
 struct root_profile *ksu_get_root_profile(uid_t uid);
+
+static inline bool is_appuid(uid_t uid)
+{
+	uid_t appid = uid % PER_USER_RANGE;
+	return appid >= FIRST_APPLICATION_UID && appid <= LAST_APPLICATION_UID;
+}
+
+static inline bool is_unsupported_app_uid(uid_t uid)
+{
+	uid_t appid = uid % 100000;
+	return appid > LAST_APPLICATION_UID;
+}
+
+static inline bool is_non_appuid(uid_t uid)
+{
+	uid_t appid = uid % PER_USER_RANGE;
+	return appid < FIRST_APPLICATION_UID;
+}
+
 #endif

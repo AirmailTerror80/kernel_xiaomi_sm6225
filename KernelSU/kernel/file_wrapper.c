@@ -1,5 +1,6 @@
 #include <linux/export.h>
 #include <linux/anon_inodes.h>
+#include <linux/aio.h> // kernel 3.18
 #include <linux/capability.h>
 #include <linux/cred.h>
 #include <linux/err.h>
@@ -65,13 +66,16 @@ static int ksu_wrapper_iopoll(struct kiocb *kiocb, bool spin) {
 }
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0) && !(LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0) && !defined(KSU_HAS_ITERATE_DIR))
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0) && (LINUX_VERSION_CODE > KERNEL_VERSION(3, 11, 0) || defined(KSU_HAS_ITERATE_DIR))
 static int ksu_wrapper_iterate (struct file *fp, struct dir_context *dc) {
 	struct ksu_file_wrapper* data = fp->private_data;
 	struct file* orig = data->orig;
 	return orig->f_op->iterate(orig, dc);
 }
-#else // int (*readdir) (struct file *, void *, filldir_t);
+#endif 
+
+// int (*readdir) (struct file *, void *, filldir_t);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0) && !defined(KSU_HAS_ITERATE_DIR)
 static int ksu_wrapper_readdir(struct file *fp, void *ptr, filldir_t filler) {
 	struct ksu_file_wrapper* data = fp->private_data;
 	struct file* orig = data->orig;
@@ -255,7 +259,7 @@ static long ksu_wrapper_fallocate(struct file *fp, int mode, loff_t offset, loff
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 19, 0)
 static void ksu_wrapper_show_fdinfo(struct seq_file *m, struct file *f) {
-	struct ksu_file_wrapper* data = m->file->private_data;
+	struct ksu_file_wrapper* data = f->private_data;
 	struct file* orig = data->orig;
 	if (orig->f_op->show_fdinfo) {
 		orig->f_op->show_fdinfo(m, orig);
@@ -263,7 +267,7 @@ static void ksu_wrapper_show_fdinfo(struct seq_file *m, struct file *f) {
 }
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
 static int ksu_wrapper_show_fdinfo(struct seq_file *m, struct file *f) {
-	struct ksu_file_wrapper* data = m->file->private_data;
+	struct ksu_file_wrapper* data = f->private_data;
 	struct file* orig = data->orig;
 	if (orig->f_op->show_fdinfo) {
 		orig->f_op->show_fdinfo(m, orig);
@@ -273,29 +277,33 @@ static int ksu_wrapper_show_fdinfo(struct seq_file *m, struct file *f) {
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 7, 0)
-static ssize_t ksu_wrapper_copy_file_range(struct file *f1, loff_t off1, struct file *f2,
-		loff_t off2, size_t sz, unsigned int flags) {
-	// TODO: determine which file to use
-	struct ksu_file_wrapper* data = f1->private_data;
+// https://cs.android.com/android/kernel/superproject/+/common-android-mainline:common/fs/read_write.c;l=1593-1606;drc=398da7defe218d3e51b0f3bdff75147e28125b60
+static ssize_t ksu_wrapper_copy_file_range(struct file *file_in, loff_t pos_in, struct file *file_out,
+		loff_t pos_out, size_t len, unsigned int flags) {
+	struct ksu_file_wrapper* data = file_out->private_data;
 	struct file* orig = data->orig;
-	if (orig->f_op->copy_file_range) {
-		return orig->f_op->copy_file_range(orig, off1, f2, off2, sz, flags);
-	}
-	return -EINVAL;
+	return orig->f_op->copy_file_range(file_in, pos_in, orig, pos_out, len, flags);
 }
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
+// no REMAP_FILE_DEDUP: use file_in
+// https://cs.android.com/android/kernel/superproject/+/common-android-mainline:common/fs/read_write.c;l=1598-1599;drc=398da7defe218d3e51b0f3bdff75147e28125b60
+// https://cs.android.com/android/kernel/superproject/+/common-android-mainline:common/fs/remap_range.c;l=403-404;drc=398da7defe218d3e51b0f3bdff75147e28125b60
+// REMAP_FILE_DEDUP: use file_out
+// https://cs.android.com/android/kernel/superproject/+/common-android-mainline:common/fs/remap_range.c;l=483-484;drc=398da7defe218d3e51b0f3bdff75147e28125b60
 static loff_t ksu_wrapper_remap_file_range(struct file *file_in, loff_t pos_in,
 				struct file *file_out, loff_t pos_out,
 				loff_t len, unsigned int remap_flags) {
-	// TODO: determine which file to use
-	struct ksu_file_wrapper* data = file_in->private_data;
-	struct file* orig = data->orig;
-	if (orig->f_op->remap_file_range) {
+	if (remap_flags & REMAP_FILE_DEDUP) {
+		struct ksu_file_wrapper* data = file_out->private_data;
+		struct file* orig = data->orig;
+		return orig->f_op->remap_file_range(file_in, pos_in, orig, pos_out, len, remap_flags);
+	} else {
+		struct ksu_file_wrapper* data = file_in->private_data;
+		struct file* orig = data->orig;
 		return orig->f_op->remap_file_range(orig, pos_in, file_out, pos_out, len, remap_flags);
 	}
-	return -EINVAL;
 }
 #endif
 
@@ -335,9 +343,10 @@ struct ksu_file_wrapper* ksu_create_file_wrapper(struct file* fp) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
 	p->ops.iopoll = fp->f_op->iopoll ? ksu_wrapper_iopoll : NULL;
 #endif
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0) && !(LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0) && !defined(KSU_HAS_ITERATE_DIR))
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0) && (LINUX_VERSION_CODE > KERNEL_VERSION(3, 11, 0) || defined(KSU_HAS_ITERATE_DIR))
 	p->ops.iterate = fp->f_op->iterate ? ksu_wrapper_iterate : NULL;
-#else
+#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0) && !defined(KSU_HAS_ITERATE_DIR)
 	p->ops.readdir = fp->f_op->readdir ? ksu_wrapper_readdir : NULL;
 #endif
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 7, 0)

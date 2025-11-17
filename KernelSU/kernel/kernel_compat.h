@@ -1,22 +1,42 @@
 #ifndef __KSU_H_KERNEL_COMPAT
 #define __KSU_H_KERNEL_COMPAT
 
+#include <linux/uaccess.h>
 #include "linux/fs.h"
 #include "linux/key.h"
 #include "linux/version.h"
 #include "linux/key.h"
+#include "linux/cred.h"
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
-extern struct key *init_session_keyring;
-#endif
-
-extern void ksu_android_ns_fs_check();
 extern struct file *ksu_filp_open_compat(const char *filename, int flags,
 					 umode_t mode);
 extern ssize_t ksu_kernel_read_compat(struct file *p, void *buf, size_t count,
 				      loff_t *pos);
 extern ssize_t ksu_kernel_write_compat(struct file *p, const void *buf,
 				       size_t count, loff_t *pos);
+
+// for supercalls.c fd install tw
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 7, 0)
+#ifndef TWA_RESUME
+#define TWA_RESUME 1
+#endif
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 7, 0)
+__weak int close_fd(unsigned fd)
+{
+	return sys_close(fd);
+}
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
+__weak int close_fd(unsigned fd)
+{
+	// this is ksys_close, but that shit is inline
+	// its problematic to cascade a weak symbol for it
+	return __close_fd(current->files, fd);
+}
+#endif
 
 extern long ksu_copy_from_user_nofault(void *dst, const void __user *src, size_t size);
 
@@ -64,11 +84,11 @@ __weak char *bin2hex(char *dst, const void *src, size_t count)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 3, 0)
 __weak ssize_t strscpy(char *dest, const char *src, size_t count)
 {
-    return strlcpy(dest, src, count);
+	return strlcpy(dest, src, count);
 }
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 9, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 9, 0) && !defined(KSU_UL_HAS_FILE_INODE)
 static inline struct inode *file_inode(struct file *f)
 {
 	return f->f_path.dentry->d_inode;
@@ -81,6 +101,20 @@ __weak int anon_inode_getfd_secure(const char *name, const struct file_operation
 			    const struct inode *context_inode)
 {
 	return anon_inode_getfd(name, fops, priv, flags);
+}
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0) && !defined(KSU_HAS_SELINUX_INODE)
+static inline struct inode_security_struct *selinux_inode(const struct inode *inode)
+{
+	return inode->i_security;
+}
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0) && !defined(KSU_HAS_SELINUX_CRED)
+static inline struct task_security_struct *selinux_cred(const struct cred *cred)
+{
+	return cred->security;
 }
 #endif
 

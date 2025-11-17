@@ -110,7 +110,7 @@ static char __user *ksud_user_path(void)
 
 // every little bit helps here
 __attribute__((hot, no_stack_protector))
-static __always_inline bool is_su_allowed(const void *ptr_to_check)
+static __always_inline bool is_su_allowed(const void **ptr_to_check)
 {
 	barrier();
 	if (!ksu_sucompat_enabled)
@@ -125,7 +125,13 @@ static __always_inline bool is_su_allowed(const void *ptr_to_check)
 	if (!ksu_is_allow_uid_for_current(current_uid().val))
 		return false;
 
-	if (unlikely(!ptr_to_check))
+	// first check the pointer-to-pointer
+	// mark as volatile to avoid toctou issues
+	if (unlikely(!(volatile void *)ptr_to_check))
+		return false;
+
+	// now dereference pointer-to-pointer to check actual pointer
+	if (unlikely(!(volatile void *)*ptr_to_check))
 		return false;
 
 	return true;
@@ -162,7 +168,7 @@ static int ksu_sucompat_user_common(const char __user **filename_user,
 int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
 			 int *__unused_flags)
 {
-	if (!is_su_allowed((const void *)filename_user))
+	if (!is_su_allowed((const void **)filename_user))
 		return 0;
 
 	return ksu_sucompat_user_common(filename_user, "faccessat", false);
@@ -171,7 +177,7 @@ int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
 // sys_newfstatat, sys_fstat64
 int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
 {
-	if (!is_su_allowed((const void *)filename_user))
+	if (!is_su_allowed((const void **)filename_user))
 		return 0;
 
 	return ksu_sucompat_user_common(filename_user, "newfstatat", false);
@@ -182,7 +188,7 @@ int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
 			       void *__never_use_argv, void *__never_use_envp,
 			       int *__never_use_flags)
 {
-	if (!is_su_allowed((const void *)filename_user))
+	if (!is_su_allowed((const void **)filename_user))
 		return 0;
 
 	return ksu_sucompat_user_common(filename_user, "sys_execve", true);
@@ -192,7 +198,7 @@ int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
 // NOT RECOMMENDED for daily use. mostly for debugging purposes.
 int ksu_getname_flags_user(const char __user **filename_user, int flags)
 {
-	if (!is_su_allowed((const void *)filename_user))
+	if (!is_su_allowed((const void **)filename_user))
 		return 0;
 
 	// sys_execve always calls getname, which sets flags = 0 on getname_flags
@@ -224,7 +230,7 @@ int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
 				 void *__never_use_argv, void *__never_use_envp,
 				 int *__never_use_flags)
 {
-	if (!is_su_allowed((const void *)filename_ptr))
+	if (!is_su_allowed((const void **)filename_ptr))
 		return 0;
 
 	// struct filename *filename = *filename_ptr;
@@ -246,23 +252,10 @@ int ksu_legacy_execve_sucompat(const char **filename_ptr,
 				 void *__never_use_argv,
 				 void *__never_use_envp)
 {
-	if (!is_su_allowed((const void *)filename_ptr))
+	if (!is_su_allowed((const void **)filename_ptr))
 		return 0;
 
 	return ksu_sucompat_kernel_common((void *)*filename_ptr, "do_execve_common", true);
-}
-#endif
-
-// vfs_statx for 5.18+
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)
-int ksu_handle_vfs_statx(void *__never_use_dfd, struct filename **filename_ptr,
-			void *__never_use_flags, void **__never_use_stat,
-			void *__never_use_request_mask)
-{
-	if (!is_su_allowed((const void *)filename_ptr))
-		return 0;
-
-	return ksu_sucompat_kernel_common((void *)(*filename_ptr)->name, "vfs_statx", false);
 }
 #endif
 
@@ -271,7 +264,7 @@ int ksu_handle_vfs_statx(void *__never_use_dfd, struct filename **filename_ptr,
 // NOT RECOMMENDED for daily use. mostly for debugging purposes.
 int ksu_getname_flags_kernel(char **kname, int flags)
 {
-	if (!is_su_allowed((const void *)kname))
+	if (!is_su_allowed((const void **)kname))
 		return 0;
 
 	return ksu_sucompat_kernel_common((void *)*kname, "getname_flags", !!!flags);

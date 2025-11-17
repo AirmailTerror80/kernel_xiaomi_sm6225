@@ -2,15 +2,12 @@
 #define __KSU_H_KSU
 
 #include <linux/types.h>
-#include <linux/workqueue.h>
 
 #define KERNEL_SU_VERSION KSU_VERSION
 
 #define EVENT_POST_FS_DATA 1
 #define EVENT_BOOT_COMPLETED 2
 #define EVENT_MODULE_MOUNTED 3
-
-bool ksu_queue_work(struct work_struct *work);
 
 static inline int startswith(char *s, char *prefix)
 {

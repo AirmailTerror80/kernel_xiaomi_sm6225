@@ -18,7 +18,6 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/namei.h>
-#include <linux/workqueue.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 #include <linux/sched/signal.h> /* fatal_signal_pending */
 #else
@@ -30,18 +29,28 @@
 #include "ksud.h"
 #include "kernel_compat.h"
 #include "selinux/selinux.h"
+#include "throne_tracker.h"
 
 bool ksu_module_mounted __read_mostly = false;
 bool ksu_boot_completed __read_mostly = false;
 
 #ifdef CONFIG_KSU_EXTRAS
-extern void ksu_avc_spoof_init();
+extern void ksu_avc_spoof_late_init();
 #else
-void ksu_avc_spoof_init() {}
+void ksu_avc_spoof_late_init() {}
 #endif
 
 #ifdef CONFIG_KSU_KPROBES_KSUD
 extern void unregister_kprobe_thread();
+#endif
+
+#if defined(CONFIG_KRETPROBES) && defined(CONFIG_KSU_KPROBES_KSUD) && \
+	LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+extern void kp_ksud_transition_routine_start();
+extern void kp_ksud_transition_routine_end();
+#else
+void kp_ksud_transition_routine_start() {}
+void kp_ksud_transition_routine_end() {}
 #endif
 
 static const char KERNEL_SU_RC[] =
@@ -96,13 +105,13 @@ void on_post_fs_data(void)
 
 #if defined(CONFIG_EXT4_FS) && ( LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0) || defined(KSU_HAS_MODERN_EXT4) )
 extern void ext4_unregister_sysfs(struct super_block *sb);
-void nuke_ext4_sysfs(const char *custompath)
+int nuke_ext4_sysfs(const char* mnt)
 {
 	struct path path;
-	int err = kern_path(custompath, 0, &path);
+	int err = kern_path(mnt, 0, &path);
 	if (err) {
 		pr_err("nuke path err: %d\n", err);
-		return;
+		return err;
 	}
 
 	struct super_block *sb = path.dentry->d_inode->i_sb;
@@ -110,34 +119,32 @@ void nuke_ext4_sysfs(const char *custompath)
 	if (strcmp(name, "ext4") != 0) {
 		pr_info("nuke but module aren't mounted\n");
 		path_put(&path);
-		return;
+		return -EINVAL;
 	}
 
 	ext4_unregister_sysfs(sb);
 	path_put(&path);
+	return 0;
 }
 #else
-void nuke_ext4_sysfs(const char *custompath) {
+int nuke_ext4_sysfs(const char* mnt) {
 	pr_info("%s: feature not implemented!\n", __func__);
+	return 0;
 }
 #endif
 
 void on_module_mounted(void){
 	pr_info("on_module_mounted!\n");
 	ksu_module_mounted = true;
-	nuke_ext4_sysfs("/data/adb/modules");
 }
 
 void on_boot_completed(void){
 	ksu_boot_completed = true;
 	pr_info("on_boot_completed!\n");
-	ksu_avc_spoof_init(); 
+	track_throne(true);
+	kp_ksud_transition_routine_end(); // security_bounded_transition rp
+	ksu_avc_spoof_late_init(); // slow_avc_init kp
 }
-
-#if defined(CONFIG_KRETPROBES) && defined(CONFIG_KSU_KPROBES_KSUD) && \
-	LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
-extern void kp_ksud_transition_routine_start();
-#endif
 
 // since _ksud handler only uses argv and envp for comparisons
 // this can probably work
@@ -183,7 +190,7 @@ int ksu_handle_bprm_ksud(const char *filename, const char *argv1, const char *en
 			pr_info("%s: /system/bin/init second_stage executed\n", __func__);
 			apply_kernelsu_rules();
 			init_second_stage_executed = true;
-			ksu_android_ns_fs_check();
+			// ksu_android_ns_fs_check();
 		}
 	}
 
@@ -194,7 +201,7 @@ int ksu_handle_bprm_ksud(const char *filename, const char *argv1, const char *en
 			pr_info("%s: /init --second-stage executed\n", __func__);
 			apply_kernelsu_rules();
 			init_second_stage_executed = true;
-			ksu_android_ns_fs_check();
+			// ksu_android_ns_fs_check();
 		}
 	}
 
@@ -221,16 +228,13 @@ int ksu_handle_bprm_ksud(const char *filename, const char *argv1, const char *en
 			pr_info("%s: /init +envp: INIT_SECOND_STAGE executed\n", __func__);
 			apply_kernelsu_rules();
 			init_second_stage_executed = true;
-			ksu_android_ns_fs_check();
+			// ksu_android_ns_fs_check();
 		}
 	}
 
 first_app_process:
-#if defined(CONFIG_KRETPROBES) && defined(CONFIG_KSU_KPROBES_KSUD) && \
-	LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
 	if (init_second_stage_executed == true)
 		kp_ksud_transition_routine_start();
-#endif
 
 	if (first_app_process && !memcmp(filename, app_process, sizeof(app_process) - 1)) {
 		first_app_process = false;
@@ -484,28 +488,52 @@ bool ksu_is_safe_mode()
 	return false;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0) // is_ksu_transition
 #include "objsec.h" // task_security_struct
+
+u32 ksud_init_sid = 0;
+u32 ksud_su_sid = 0;
+
+int grab_transition_sids()
+{
+	int error = security_secctx_to_secid("u:r:init:s0", strlen("u:r:init:s0"), &ksud_init_sid);
+	if (error)
+		return 1;
+
+	pr_info("is_ksu_transition: got init sid: %d\n", ksud_init_sid);
+
+	error = security_secctx_to_secid("u:r:su:s0", strlen("u:r:su:s0"), &ksud_su_sid);
+	if (error)
+		return 1;
+
+	pr_info("is_ksu_transition: got su sid: %d\n", ksud_su_sid);
+	
+	return 0;
+}
+
 bool is_ksu_transition(const struct task_security_struct *old_tsec,
 			const struct task_security_struct *new_tsec)
 {
-	static u32 ksu_sid;
-	char *secdata;
-	u32 seclen;
-	bool allowed = false;
 
-	if (!ksu_sid)
-		security_secctx_to_secid("u:r:su:s0", strlen("u:r:su:s0"), &ksu_sid);
-
-	if (security_secid_to_secctx(old_tsec->sid, &secdata, &seclen))
+	// we don't need this hook anymore after the third ksud run, which is boot-complete.
+	if (likely(ksu_boot_completed))
 		return false;
 
-	allowed = (!strcmp("u:r:init:s0", secdata) && new_tsec->sid == ksu_sid);
-	security_release_secctx(secdata, seclen);
-	
-	return allowed;
+	if (!ksud_su_sid || !ksud_init_sid) {
+		int ret = grab_transition_sids();
+		if (ret)
+			return false;
+	}
+
+	// if its init transitioning to su, allow it
+	if (old_tsec->sid == ksud_init_sid && new_tsec->sid == ksud_su_sid) {
+		pr_info("%s: allowing init (%d) -> su (%d)\n", __func__, ksud_init_sid, ksud_su_sid);
+		return true;
+	}
+
+	return false;
 }
-#endif
+#endif // is_ksu_transition
 
 static void stop_vfs_read_hook()
 {

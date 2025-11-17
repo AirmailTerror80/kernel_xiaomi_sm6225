@@ -86,7 +86,7 @@ void disable_seccomp()
 #endif
 }
 
-void escape_with_root_profile(void)
+static void escape_to_root(bool is_kthread)
 {
 	struct cred *cred;
 
@@ -96,7 +96,7 @@ void escape_with_root_profile(void)
 		return;
 	}
 
-	if (cred->euid.val == 0) {
+	if (!is_kthread && cred->euid.val == 0) {
 		pr_warn("Already root, don't escape!\n");
 		abort_creds(cred);
 		return;
@@ -134,11 +134,29 @@ void escape_with_root_profile(void)
 
 	commit_creds(cred);
 
+#ifdef CONFIG_SECCOMP
+	if (!!!current->seccomp.mode)
+		goto setup_selinux;
+#endif
+
 	// Refer to kernel/seccomp.c: seccomp_set_mode_strict
 	// When disabling Seccomp, ensure that current->sighand->siglock is held during the operation.
 	spin_lock_irq(&current->sighand->siglock);
 	disable_seccomp();
 	spin_unlock_irq(&current->sighand->siglock);
 
+setup_selinux:
 	setup_selinux(profile->selinux_domain);
+}
+
+void escape_with_root_profile(void)
+{
+	escape_to_root(false);
+}
+
+void kthread_escape(void)
+{
+	// I'm not really sure which permissions are needed
+	// so lets go with this for now
+	escape_to_root(true);
 }

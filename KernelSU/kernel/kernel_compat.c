@@ -35,79 +35,52 @@ static inline int install_session_keyring(struct key *keyring)
 
 	return commit_creds(new);
 }
-#endif
 
-extern struct task_struct init_task;
-
-// mnt_ns context switch for environment that android_init->nsproxy->mnt_ns != init_task.nsproxy->mnt_ns, such as WSA
-struct ksu_ns_fs_saved {
-	struct nsproxy *ns;
-	struct fs_struct *fs;
-};
-
-static void ksu_save_ns_fs(struct ksu_ns_fs_saved *ns_fs_saved)
+void ksu_grab_init_session_keyring(const char *filename)
 {
-	ns_fs_saved->ns = current->nsproxy;
-	ns_fs_saved->fs = current->fs;
-}
-
-static void ksu_load_ns_fs(struct ksu_ns_fs_saved *ns_fs_saved)
-{
-	current->nsproxy = ns_fs_saved->ns;
-	current->fs = ns_fs_saved->fs;
-}
-
-static bool android_context_saved_checked = false;
-static bool android_context_saved_enabled = false;
-static struct ksu_ns_fs_saved android_context_saved;
-
-void ksu_android_ns_fs_check()
-{
-	if (android_context_saved_checked)
+	if (init_session_keyring)
 		return;
-	android_context_saved_checked = true;
-	task_lock(current);
-	if (current->nsproxy && current->fs &&
-	    current->nsproxy->mnt_ns != init_task.nsproxy->mnt_ns) {
-		android_context_saved_enabled = true;
-		pr_info("android context saved enabled due to init mnt_ns(%p) != android mnt_ns(%p)\n",
-			current->nsproxy->mnt_ns, init_task.nsproxy->mnt_ns);
-		ksu_save_ns_fs(&android_context_saved);
-	} else {
-		pr_info("android context saved disabled\n");
-	}
-	task_unlock(current);
+		
+	if (!strstr(filename, "init")) 
+		return;
+
+	if (!!strcmp(current->comm, "init"))
+		return;
+
+	if (!!!is_init(get_current_cred()))
+		return;
+
+	// thats surely some exclamation comedy
+	// and now we are sure that this is the key we want
+	// up to 5.1, struct key __rcu *session_keyring; /* keyring inherited over fork */
+	// so we need to grab this using rcu_dereference
+	struct key *keyring = rcu_dereference(current->cred->session_keyring);
+	if (!keyring)
+		return;
+
+	init_session_keyring = key_get(keyring);
+
+	pr_info("%s: init_session_keyring: 0x%p \n", __func__, init_session_keyring);
+
+	// TODO: put_key / key_put? check refcount?
+	// maybe not, we keep it for the whole lifetime?
+	// ALSO: maybe print init_session_keyring->index_key.description again? 
+	// its a union so init_session_keyring->description is the same?
+	
 }
+#endif
 
 struct file *ksu_filp_open_compat(const char *filename, int flags, umode_t mode)
 {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
-	if (init_session_keyring != NULL && !current_cred()->session_keyring &&
-	    (current->flags & PF_WQ_WORKER)) {
-		pr_info("installing init session keyring for older kernel\n");
+	// normally we only put this on ((current->flags & PF_WQ_WORKER) || (current->flags & PF_KTHREAD))
+	// but in the grand scale of things, this does NOT matter.
+	if (init_session_keyring != NULL && !current_cred()->session_keyring) {
+		// pr_info("installing init session keyring for older kernel\n");
 		install_session_keyring(init_session_keyring);
 	}
 #endif
-	// switch mnt_ns even if current is not wq_worker, to ensure what we open is the correct file in android mnt_ns, rather than user created mnt_ns
-	struct ksu_ns_fs_saved saved;
-	if (android_context_saved_enabled) {
-#ifdef CONFIG_KSU_DEBUG
-		pr_info("start switch current nsproxy and fs to android context\n");
-#endif
-		task_lock(current);
-		ksu_save_ns_fs(&saved);
-		ksu_load_ns_fs(&android_context_saved);
-		task_unlock(current);
-	}
 	struct file *fp = filp_open(filename, flags, mode);
-	if (android_context_saved_enabled) {
-		task_lock(current);
-		ksu_load_ns_fs(&saved);
-		task_unlock(current);
-#ifdef CONFIG_KSU_DEBUG
-		pr_info("switch current nsproxy and fs back to saved successfully\n");
-#endif
-	}
 	return fp;
 }
 
