@@ -198,11 +198,14 @@ static void try_umount(const char *mnt, int flags)
 #endif
 }
 
+static inline void ksu_force_sig(int sig)
+{
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0) 
-#define KSU_FORCE_KILL force_sig(SIGKILL) 
+	force_sig(sig);
 #else
-#define KSU_FORCE_KILL force_sig(SIGKILL, current)
+	force_sig(sig, current);
 #endif
+}
 
 LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 {
@@ -210,50 +213,48 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 		return 0;
 	}
 
-	kuid_t new_uid = new->uid;
-	kuid_t old_uid = old->uid;
-	kuid_t new_euid = new->euid;
-	kuid_t old_euid = old->euid;
+	uid_t new_uid = new->uid.val;
+	uid_t old_uid = old->uid.val;
+	uid_t new_euid = new->euid.val;
+	uid_t old_euid = old->euid.val;
 
-	if (0 != old_uid.val && ksu_enhanced_security_enabled) {
+	if (0 != old_uid && ksu_enhanced_security_enabled) {
 		// disallow any non-ksu domain escalation from non-root to root!
-		if (unlikely(new_euid.val) == 0 && !is_ksu_domain()) {
-			pr_warn("find suspicious EoP: %d %s, from %d to %d\n", current->pid, current->comm, old_uid.val, new_uid.val);
-			KSU_FORCE_KILL;
+		if (unlikely(new_euid) == 0 && !is_ksu_domain()) {
+			pr_warn("find suspicious EoP: %d %s, from %d to %d\n", current->pid, current->comm, old_uid, new_uid);
+			ksu_force_sig(SIGKILL);
 			return 0;
 		}
 		// disallow appuid decrease to any other uid if it is not allowed to su
-		if (is_appuid(old_uid.val)) {
-			if (new_euid.val < old_euid.val && !ksu_is_allow_uid_for_current(old_uid.val)) {
-				pr_warn("find suspicious EoP: %d %s, from %d to %d\n", current->pid, current->comm, old_euid.val, new_euid.val);
-				KSU_FORCE_KILL;
+		if (is_appuid(old_uid)) {
+			if (new_euid < old_euid && !ksu_is_allow_uid_for_current(old_uid)) {
+				pr_warn("find suspicious EoP: %d %s, from %d to %d\n", current->pid, current->comm, old_euid, new_euid);
+				ksu_force_sig(SIGKILL);
 				return 0;
 			}
 		}
-		
+
 		return 0;
 	}
 	
 	// old process is not root, ignore it.
-	if (0 != old_uid.val)
+	if (0 != old_uid)
 		return 0;
-
-	// if on private space, see if its possibly the manager
-	if (new_uid.val > PER_USER_RANGE && new_uid.val % PER_USER_RANGE == ksu_get_manager_uid()) {
-		ksu_set_manager_uid(new_uid.val);
-	}
 
 	// we dont have those new fancy things upstream has
 	// lets just do original thing where we disable seccomp
-	if (unlikely(ksu_is_allow_uid_for_current(new_uid.val))) {
+	if (ksu_get_manager_appid() == new_uid % PER_USER_RANGE) {
 		spin_lock_irq(&current->sighand->siglock);
 		disable_seccomp();
 		spin_unlock_irq(&current->sighand->siglock);
-		if (ksu_get_manager_uid() == new_uid.val) {
-			pr_info("install fd for: %d\n", new_uid.val);
-			ksu_install_fd(); // install fd for ksu manager
-		}
+		pr_info("install fd for: %d\n", new_uid);
+		ksu_install_fd(); // install fd for ksu manager
+	}
 
+	if (unlikely(ksu_is_allow_uid_for_current(new_uid))) {
+		spin_lock_irq(&current->sighand->siglock);
+		disable_seccomp();
+		spin_unlock_irq(&current->sighand->siglock);
 		return 0;
 	}
 
@@ -266,17 +267,21 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 		return 0;
 	}
 
+	if (!ksu_cred) {
+		return 0;
+	}
+
 	// There are 5 scenarios:
 	// 1. Normal app: zygote -> appuid
 	// 2. Isolated process forked from zygote: zygote -> isolated_process
 	// 3. App zygote forked from zygote: zygote -> appuid
 	// 4. Isolated process froked from app zygote: appuid -> isolated_process (already handled by 3)
 	// 5. Isolated process froked from webview zygote (no need to handle, app cannot run custom code)
-	if (!is_appuid(new_uid.val) && !is_isolated_process(new_uid.val)) {
+	if (!is_appuid(new_uid) && !is_isolated_process(new_uid)) {
 		return 0;
 	}
 
-	if (!ksu_uid_should_umount(new_uid.val) && !is_isolated_process(new_uid.val)) {
+	if (!ksu_uid_should_umount(new_uid) && !is_isolated_process(new_uid)) {
 		return 0;
 	}
 
@@ -286,13 +291,14 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 	// also handle case 4 and 5
 	bool is_zygote_child = is_zygote(old);
 	if (!is_zygote_child) {
-		pr_info("handle umount ignore non zygote child: %d\n",
-			current->pid);
+		pr_info("handle umount ignore non zygote child: %d\n", current->pid);
 		return 0;
 	}
 
 	// umount the target mnt
-	pr_info("handle umount for uid: %d, pid: %d\n", new_uid.val, current->pid);
+	pr_info("handle umount for uid: %d, pid: %d\n", new_uid, current->pid);
+
+	const struct cred *saved = override_creds(ksu_cred);
 
 	struct mount_entry *entry;
 	down_read(&mount_list_lock);
@@ -301,6 +307,8 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 		try_umount(entry->umountable, entry->flags);
 	}
 	up_read(&mount_list_lock);
+
+	revert_creds(saved);
 
 	return 0;
 }
@@ -325,6 +333,7 @@ LSM_HANDLER_TYPE ksu_bprm_check(struct linux_binprm *bprm)
 
 // dummy
 #ifndef CONFIG_KSU_LSM_SECURITY_HOOKS
+#include <linux/key.h>
 int ksu_key_permission(key_ref_t key_ref, const struct cred *cred,
 			      unsigned perm)
 {

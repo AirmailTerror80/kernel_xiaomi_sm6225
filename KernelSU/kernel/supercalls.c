@@ -235,14 +235,14 @@ static int do_uid_should_umount(void __user *arg)
 	return 0;
 }
 
-static int do_get_manager_uid(void __user *arg)
+static int do_get_manager_appid(void __user *arg)
 {
-	struct ksu_get_manager_uid_cmd cmd;
+	struct ksu_get_manager_appid_cmd cmd;
 
-	cmd.uid = ksu_get_manager_uid();
+	cmd.appid = ksu_get_manager_appid();
 
 	if (copy_to_user(arg, &cmd, sizeof(cmd))) {
-		pr_err("get_manager_uid: copy_to_user failed\n");
+		pr_err("get_manager_appid: copy_to_user failed\n");
 		return -EFAULT;
 	}
 
@@ -575,6 +575,55 @@ static int add_try_umount(void __user *arg)
 			return 0;
 		}
 		
+		// this way userspace can deduce the memory it has to prepare.
+		case KSU_UMOUNT_GETSIZE: {
+			// check for pointer first
+			if (!cmd.arg)
+				return -EFAULT;
+		
+			size_t total_size = 0; // size of list in bytes
+
+			down_read(&mount_list_lock);
+			list_for_each_entry(entry, &mount_list, list) {
+				total_size = total_size + strlen(entry->umountable) + 1; // + 1 for \0
+			}
+			up_read(&mount_list_lock);
+
+			pr_info("cmd_add_try_umount: total_size: %zu\n", total_size);
+			
+			if (copy_to_user((size_t __user *)cmd.arg, &total_size, sizeof(total_size)))
+				return -EFAULT;
+
+			return 0;
+		}
+		
+		// WARNING! this is straight up pointerwalking.
+		// this way we dont need to redefine the ioctl defs.
+		// this also avoids us needing to kmalloc
+		// userspace have to send pointer to memory (malloc/alloca) or pointer to a VLA.
+		case KSU_UMOUNT_GETLIST: {
+			if (!cmd.arg)
+				return -EFAULT;
+			
+			void *user_buf = (void *)cmd.arg;
+
+			down_read(&mount_list_lock);
+			list_for_each_entry(entry, &mount_list, list) {
+				pr_info("cmd_add_try_umount: entry: %s\n", entry->umountable);
+			
+				if (copy_to_user(user_buf, entry->umountable, strlen(entry->umountable) + 1 )) {
+					up_read(&mount_list_lock);
+					return -EFAULT;
+				}
+				
+				// walk it! +1 for null terminator
+				user_buf = user_buf + strlen(entry->umountable) + 1;
+			}
+			up_read(&mount_list_lock);
+
+			return 0;
+		}
+		
 		default: {
 			pr_err("cmd_add_try_umount: invalid operation %u\n", cmd.mode);
 			return -EINVAL;
@@ -596,7 +645,7 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
 	{ .cmd = KSU_IOCTL_GET_DENY_LIST, .name = "GET_DENY_LIST", .handler = do_get_deny_list, .perm_check = manager_or_root },
 	{ .cmd = KSU_IOCTL_UID_GRANTED_ROOT, .name = "UID_GRANTED_ROOT", .handler = do_uid_granted_root, .perm_check = manager_or_root },
 	{ .cmd = KSU_IOCTL_UID_SHOULD_UMOUNT, .name = "UID_SHOULD_UMOUNT", .handler = do_uid_should_umount, .perm_check = manager_or_root },
-	{ .cmd = KSU_IOCTL_GET_MANAGER_UID, .name = "GET_MANAGER_UID", .handler = do_get_manager_uid, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_GET_MANAGER_APPID, .name = "GET_MANAGER_APPID", .handler = do_get_manager_appid, .perm_check = manager_or_root },
 	{ .cmd = KSU_IOCTL_GET_APP_PROFILE, .name = "GET_APP_PROFILE", .handler = do_get_app_profile, .perm_check = only_manager },
 	{ .cmd = KSU_IOCTL_SET_APP_PROFILE, .name = "SET_APP_PROFILE", .handler = do_set_app_profile, .perm_check = only_manager },
 	{ .cmd = KSU_IOCTL_GET_FEATURE, .name = "GET_FEATURE", .handler = do_get_feature, .perm_check = manager_or_root },
@@ -681,10 +730,25 @@ int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user 
 	if (magic2 == KSU_INSTALL_MAGIC2) {
 		return ksu_handle_fd_request(arg4);
 	}
-
-	// grab a copy as we write the pointer on the pointer
-	// u64 reply = (u64)*arg;	
+	
 	// extensions
+	u64 reply = (u64)*arg;
+
+	if (magic2 == CHANGE_MANAGER_UID) {
+		// only root is allowed for this command
+		if (current_uid().val != 0)
+			return 0;
+
+		pr_info("sys_reboot: ksu_set_manager_appid to: %d\n", cmd);
+		ksu_set_manager_appid(cmd);
+
+		if (cmd == ksu_get_manager_appid()) {
+			if (copy_to_user((void __user *)*arg, &reply, sizeof(reply)))
+				pr_info("sys_reboot: reply fail\n");
+		}
+
+		return 0;
+	}
 
 	return 0;
 }

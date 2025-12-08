@@ -112,7 +112,8 @@ static int ksu_sucompat_user_common(const char __user **filename_user,
 	if (ksu_copy_from_user_retry(path, *filename_user, sizeof(path)))
 		return 0;
 
-	path[sizeof(path) - 1] = '\0';
+	// what we shouldve copied should've been preterminated!
+	// path[sizeof(path) - 1] = '\0';
 
 	if (memcmp(path, su, sizeof(su)))
 		return 0;
@@ -205,10 +206,14 @@ int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
 	return ksu_sucompat_kernel_common((void *)(*filename_ptr)->name, "do_execveat_common", true);
 }
 
+// for compatibility to old hooks
 int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
 			void *envp, int *flags)
 {
-	return ksu_handle_execveat_sucompat(fd, filename_ptr, argv, envp, flags);
+	if (!is_su_allowed((const void **)filename_ptr))
+		return 0;
+
+	return ksu_sucompat_kernel_common((void *)(*filename_ptr)->name, "do_execveat_common", true);
 }
 #else
 // for do_execve_common on < 3.14
@@ -221,6 +226,19 @@ int ksu_legacy_execve_sucompat(const char **filename_ptr,
 		return 0;
 
 	return ksu_sucompat_kernel_common((void *)*filename_ptr, "do_execve_common", true);
+}
+#endif
+
+// vfs_statx for 5.18+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)
+int ksu_handle_vfs_statx(void *__never_use_dfd, struct filename **filename_ptr,
+			void *__never_use_flags, void **__never_use_stat,
+			void *__never_use_request_mask)
+{
+	if (!is_su_allowed((const void **)filename_ptr))
+		return 0;
+
+	return ksu_sucompat_kernel_common((void *)(*filename_ptr)->name, "vfs_statx", false);
 }
 #endif
 

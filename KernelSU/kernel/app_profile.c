@@ -149,6 +149,10 @@ setup_selinux:
 	setup_selinux(profile->selinux_domain);
 }
 
+void escape_to_root_for_init(void) {
+	setup_selinux(KERNEL_SU_CONTEXT);
+}
+
 void escape_with_root_profile(void)
 {
 	escape_to_root(false);
