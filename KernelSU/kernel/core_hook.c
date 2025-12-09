@@ -30,9 +30,7 @@
 #include <linux/mount.h>
 #include <linux/fs.h>
 #include <linux/namei.h>
-#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)) && !defined(KSU_HAS_PATH_UMOUNT) 
 #include <linux/syscalls.h> // sys_umount
-#endif
 
 #include "allowlist.h"
 #include "core_hook.h"

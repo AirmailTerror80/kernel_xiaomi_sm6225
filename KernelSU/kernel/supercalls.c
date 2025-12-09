@@ -605,13 +605,13 @@ static int add_try_umount(void __user *arg)
 			if (!cmd.arg)
 				return -EFAULT;
 			
-			void *user_buf = (void *)cmd.arg;
+			char *user_buf = (char *)cmd.arg;
 
 			down_read(&mount_list_lock);
 			list_for_each_entry(entry, &mount_list, list) {
 				pr_info("cmd_add_try_umount: entry: %s\n", entry->umountable);
 			
-				if (copy_to_user(user_buf, entry->umountable, strlen(entry->umountable) + 1 )) {
+				if (copy_to_user((char __user *)user_buf, entry->umountable, strlen(entry->umountable) + 1 )) {
 					up_read(&mount_list_lock);
 					return -EFAULT;
 				}
