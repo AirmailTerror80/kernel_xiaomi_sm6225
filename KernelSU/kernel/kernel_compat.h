@@ -6,6 +6,7 @@
 #include <linux/key.h>
 #include <linux/version.h>
 #include <linux/key.h>
+#include <linux/syscalls.h>
 #include <linux/cred.h>
 
 extern struct file *ksu_filp_open_compat(const char *filename, int flags,
@@ -92,15 +93,6 @@ __weak ssize_t strscpy(char *dest, const char *src, size_t count)
 static inline struct inode *file_inode(struct file *f)
 {
 	return f->f_path.dentry->d_inode;
-}
-#endif
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
-__weak int anon_inode_getfd_secure(const char *name, const struct file_operations *fops,
-			    void *priv, int flags,
-			    const struct inode *context_inode)
-{
-	return anon_inode_getfd(name, fops, priv, flags);
 }
 #endif
 

@@ -14,14 +14,6 @@
 #include <linux/sched.h>
 #endif
 
-#include "allowlist.h"
-#include "feature.h"
-#include "klog.h" // IWYU pragma: keep
-#include "ksud.h"
-#include "kernel_compat.h"
-#include "sucompat.h"
-#include "app_profile.h"
-
 #define SU_PATH "/system/bin/su"
 #define SH_PATH "/system/bin/sh"
 
@@ -91,7 +83,6 @@ static __always_inline bool is_su_allowed(const void **ptr_to_check)
 		return false;
 
 	// first check the pointer-to-pointer
-	// mark as volatile to avoid toctou issues
 	if (unlikely(!(volatile void *)ptr_to_check))
 		return false;
 
@@ -119,10 +110,12 @@ static int ksu_sucompat_user_common(const char __user **filename_user,
 		return 0;
 
 	if (escalate) {
+		write_sulog('x');
 		pr_info("%s su found\n", syscall_name);
 		*filename_user = ksud_user_path();
 		escape_with_root_profile(); // escalate !!
 	} else {
+		write_sulog('$');
 		pr_info("%s su->sh!\n", syscall_name);
 		*filename_user = sh_user_path();
 	}
@@ -179,10 +172,12 @@ static int ksu_sucompat_kernel_common(void *filename_ptr, const char *function_n
 		return 0;
 
 	if (escalate) {
+		write_sulog('x');
 		pr_info("%s su found\n", function_name);
 		memcpy(filename_ptr, KSUD_PATH, sizeof(KSUD_PATH));
 		escape_with_root_profile();
 	} else {
+		write_sulog('$');
 		pr_info("%s su->sh\n", function_name);
 		memcpy(filename_ptr, SH_PATH, sizeof(SH_PATH));
 	}

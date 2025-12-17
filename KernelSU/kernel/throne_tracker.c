@@ -9,13 +9,6 @@
 #include <linux/kthread.h>
 #include <linux/sched.h>
 
-#include "allowlist.h"
-#include "klog.h" // IWYU pragma: keep
-#include "ksu.h"
-#include "manager.h"
-#include "throne_tracker.h"
-#include "kernel_compat.h"
-
 uid_t ksu_manager_appid = KSU_INVALID_APPID;
 
 static struct task_struct *throne_thread;

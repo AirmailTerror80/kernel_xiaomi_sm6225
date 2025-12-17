@@ -32,19 +32,6 @@
 #include <linux/namei.h>
 #include <linux/syscalls.h> // sys_umount
 
-#include "allowlist.h"
-#include "core_hook.h"
-#include "feature.h"
-#include "klog.h" // IWYU pragma: keep
-#include "ksu.h"
-#include "ksud.h"
-#include "manager.h"
-#include "selinux/selinux.h"
-#include "throne_tracker.h"
-#include "kernel_compat.h"
-#include "supercalls.h"
-#include "ksud.h"
-
 #ifdef CONFIG_KSU_LSM_SECURITY_HOOKS
 #define LSM_HANDLER_TYPE static int
 #else
@@ -145,28 +132,35 @@ LSM_HANDLER_TYPE ksu_handle_rename(struct dentry *old_dentry, struct dentry *new
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0) || defined(KSU_HAS_PATH_UMOUNT)
-static void ksu_path_umount(const char *mnt, struct path *path, int flags)
+static inline void ksu_umount_mnt(const char *mnt, struct path *path, int flags)
 {
 	int err = path_umount(path, flags);
+
+	// upstream actually has a UAF here: path->dentry after dput
+	// but its fine as umount always succeeds
+	// that code path is very cold
+
 	pr_info("path_umount: %s code: %d\n", mnt, err);
 }
 #else
-static void ksu_sys_umount(const char *mnt, int flags)
+static inline void ksu_umount_mnt(const char *mnt, struct path *path, int flags)
 {
-	char __user *usermnt = (char __user *)mnt;
-
 	mm_segment_t old_fs = get_fs();
-	set_fs(KERNEL_DS);
+	set_fs(KERNEL_DS); // to allow access to kernel's data segment
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 17, 0)
-	int ret = ksys_umount(usermnt, flags);
-	set_fs(old_fs);
-	pr_info("ksys_umount: %s code: %d \n", mnt, ret);
+	int ret = ksys_umount((char __user *)mnt, flags);
 #else
-	long ret = sys_umount(usermnt, flags); // cuz asmlinkage long sys##name
-	set_fs(old_fs);
-	pr_info("sys_umount: %s code: %d \n", mnt, ret);
+	long ret = sys_umount((char __user *)mnt, flags); // cuz asmlinkage long sys##name
 #endif
-	return;
+
+	set_fs(old_fs);
+	
+	pr_info("sys_umount: %s code: %d \n", mnt, ret);
+
+	// release ref here! user_path_at increases it
+	// then only cleans for itself
+	path_put(path);
 }
 #endif // KSU_HAS_PATH_UMOUNT
 
@@ -184,16 +178,7 @@ static void try_umount(const char *mnt, int flags)
 		return;
 	}
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0) || defined(KSU_HAS_PATH_UMOUNT)
-	ksu_path_umount(mnt, &path, flags);
-	// dont call path_put here!!
-	// path_umount releases ref for us
-#else
-	ksu_sys_umount(mnt, flags);
-	// release ref here! user_path_at increases it
-	// then only cleans for itself
-	path_put(&path);
-#endif
+	ksu_umount_mnt(mnt, &path, flags);
 }
 
 static inline void ksu_force_sig(int sig)
@@ -311,7 +296,7 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 	return 0;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
 extern void ksu_grab_init_session_keyring(const char *filename);
 #endif
 
@@ -320,7 +305,7 @@ LSM_HANDLER_TYPE ksu_bprm_check(struct linux_binprm *bprm)
 	if (likely(!ksu_execveat_hook))
 		return 0;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
 	ksu_grab_init_session_keyring((const char *)bprm->filename);
 #endif
 

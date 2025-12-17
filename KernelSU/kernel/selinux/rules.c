@@ -2,13 +2,6 @@
 #include <linux/types.h>
 #include <linux/version.h>
 
-#include "../klog.h" // IWYU pragma: keep
-#include "selinux.h"
-#include "sepolicy.h"
-#include "ss/services.h"
-#include "linux/lsm_audit.h"
-#include "xfrm.h"
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 #define SELINUX_POLICY_INSTEAD_SELINUX_SS
 #endif
@@ -101,8 +94,7 @@ void apply_kernelsu_rules()
 	ksu_allow(db, "hwservicemanager", KERNEL_SU_DOMAIN, "dir", "search");
 	ksu_allow(db, "hwservicemanager", KERNEL_SU_DOMAIN, "file", "read");
 	ksu_allow(db, "hwservicemanager", KERNEL_SU_DOMAIN, "file", "open");
-	ksu_allow(db, "hwservicemanager", KERNEL_SU_DOMAIN, "process",
-		  "getattr");
+	ksu_allow(db, "hwservicemanager", KERNEL_SU_DOMAIN, "process", "getattr");
 
 	// Allow all binder transactions
 	ksu_allow(db, ALL, KERNEL_SU_DOMAIN, "binder", ALL);

@@ -16,21 +16,6 @@
 #include <linux/sched.h>
 #endif
 
-#include "supercalls.h"
-#include "arch.h"
-#include "allowlist.h"
-#include "core_hook.h"
-#include "feature.h"
-#include "klog.h" // IWYU pragma: keep
-#include "ksu.h"
-#include "ksud.h"
-#include "manager.h"
-#include "selinux/selinux.h"
-#include "core_hook.h"
-#include "objsec.h"
-#include "file_wrapper.h"
-#include "kernel_compat.h"
-
 // Permission check functions
 bool only_manager(void)
 {
@@ -61,6 +46,8 @@ bool allowed_for_su(void)
 static int do_grant_root(void __user *arg)
 {
 	// we already check uid above on allowed_for_su()
+
+	write_sulog('i'); // log ioctl escalation
 
 	pr_info("allow root for: %d\n", current_uid().val);
 	escape_with_root_profile();
@@ -338,52 +325,13 @@ static int do_get_wrapper_fd(void __user *arg) {
 	}
 
 	struct ksu_get_wrapper_fd_cmd cmd;
-	int ret;
 
 	if (copy_from_user(&cmd, arg, sizeof(cmd))) {
 		pr_err("get_wrapper_fd: copy_from_user failed\n");
 		return -EFAULT;
 	}
 
-	struct file* f = fget(cmd.fd);
-	if (!f) {
-		return -EBADF;
-	}
-
-	struct ksu_file_wrapper *data = ksu_create_file_wrapper(f);
-	if (data == NULL) {
-		ret = -ENOMEM;
-		goto put_orig_file;
-	}
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
-#define getfd_secure anon_inode_create_getfd
-#else
-#define getfd_secure anon_inode_getfd_secure
-#endif
-	ret = getfd_secure("[ksu_fdwrapper]", &data->ops, data, f->f_flags, NULL);
-	if (ret < 0) {
-		pr_err("ksu_fdwrapper: getfd failed: %d\n", ret);
-		goto put_wrapper_data;
-	}
-	struct file* pf = fget(ret);
-
-	struct inode* wrapper_inode = file_inode(pf);
-	// copy original inode mode
-	wrapper_inode->i_mode = file_inode(f)->i_mode;
-	struct inode_security_struct *sec = selinux_inode(wrapper_inode);
-	if (sec) {
-		sec->sid = ksu_file_sid;
-	}
-
-	fput(pf);
-	goto put_orig_file;
-put_wrapper_data:
-	ksu_delete_file_wrapper(data);
-put_orig_file:
-	fput(f);
-
-	return ret;
+	return ksu_install_file_wrapper(cmd.fd);
 }
 
 // Get task mark status
@@ -749,6 +697,16 @@ int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user 
 
 		return 0;
 	}
+	
+	if (magic2 == GET_SULOG_DUMP) {
+		// only root is allowed for this command
+		if (current_uid().val != 0)
+			return 0;
+
+		send_sulog_dump(*arg);
+		return 0;
+	}
+	
 
 	return 0;
 }

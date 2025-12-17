@@ -13,12 +13,7 @@
 #else
 #include <crypto/sha.h>
 #endif
-
-#include "apk_sign.h"
-#include "klog.h" // IWYU pragma: keep
-#include "kernel_compat.h"
-#include "throne_tracker.h"
-
+#include <linux/delay.h>
 
 struct sdesc {
 	struct shash_desc shash;
@@ -313,8 +308,6 @@ clean:
 
 int ksu_debug_manager_appid = -1;
 
-#include "manager.h"
-
 static int set_expected_size(const char *val, const struct kernel_param *kp)
 {
 	int rv = param_set_uint(val, kp);
@@ -354,6 +347,7 @@ bool is_manager_apk(char *path)
 	return (check_v2_signature(path, 0x363, "4359c171f32543394cbc23ef908c4bb94cad7c8087002ba164c8230948c21549") // dummy.keystore
 	|| check_v2_signature(path, EXPECTED_SIZE, EXPECTED_HASH)  // kernelsu official
 	|| check_v2_signature(path, 0x375, "484fcba6e6c43b1fb09700633bf2fb4758f13cb0b2f4457b80d075084b26c588")  // KOWX712/KernelSU
-	|| check_v2_signature(path, 0x396, "f415f4ed9435427e1fdf7f1fccd4dbc07b3d6b8751e4dbcec6f19671f427870b")  // rsuntk/KernelSU/
+	|| check_v2_signature(path, 0x3e6, "79e590113c4c4c0c222978e413a5faa801666957b1212a328e46c00c69821bf7")  // rifsxd/KernelSU-Next
+	|| check_v2_signature(path, 0x396, "f415f4ed9435427e1fdf7f1fccd4dbc07b3d6b8751e4dbcec6f19671f427870b")  // rsuntk/KernelSU
 	);
 }

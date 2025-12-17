@@ -2,12 +2,6 @@
 #include <linux/atomic.h>
 #include <linux/version.h>
 
-#include "feature.h"
-#include "klog.h"
-#include "ksud.h"
-#include "kernel_compat.h"
-#include "selinux/selinux.h"
-
 // sorry for the ifdef hell
 // but im too lazy to fragment this out.
 // theres only one feature so far anyway
@@ -96,7 +90,6 @@ int ksu_handle_slow_avc_audit_new(u32 tsid, u16 *tclass)
 #if defined(CONFIG_KPROBES) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
 #include <linux/kprobes.h>
 #include <linux/slab.h>
-#include "arch.h"
 static struct kprobe *slow_avc_audit_kp;
 
 static int slow_avc_audit_pre_handler(struct kprobe *p, struct pt_regs *regs)
