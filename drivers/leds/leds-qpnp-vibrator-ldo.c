@@ -218,7 +218,7 @@ static void qpnp_vib_work(struct work_struct *work)
 			cancel_work_sync(&chip->overdrive_work);
 		} 
 		*/
-		qpnp_vib_ldo_enable(chip);
+		qpnp_vibrator_play_off(chip);
 	}
 }
 
@@ -480,7 +480,7 @@ static int qpnp_vibrator_ldo_suspend(struct device *dev)
 	*/
 	hrtimer_cancel(&chip->stop_timer);
 	cancel_work_sync(&chip->vib_work);
-	qpnp_vib_ldo_enable(chip);
+	qpnp_vibrator_play_off(chip);
 	mutex_unlock(&chip->lock);
 
 	return 0;
