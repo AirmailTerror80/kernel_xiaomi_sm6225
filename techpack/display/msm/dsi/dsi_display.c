@@ -5282,7 +5282,6 @@ static DEVICE_ATTR(cabc, 0644,
 #endif
 
 static struct attribute *display_fs_attrs[] = {
-	&dev_attr_hbm.attr,
 #ifdef CONFIG_TARGET_PROJECT_K7T
 	&dev_attr_doze_status.attr,
 	&dev_attr_doze_mode.attr,
