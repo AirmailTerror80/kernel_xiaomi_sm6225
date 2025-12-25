@@ -129,7 +129,7 @@ obj-$(CONFIG_RSEQ) += rseq.o
 $(obj)/configs.o: $(obj)/config_data.h
 
 targets += config_data.gz
-ifdef CONFIG_TARGET_PROJECT_K7T
+ifdef CONFIG_TARGET_PROJECT_C3Q
 $(obj)/config_data.gz: arch/arm64/configs/stock_defconfig FORCE
 else
 $(obj)/config_data.gz: $(KCONFIG_CONFIG) FORCE
