@@ -854,7 +854,7 @@ static inline void set_protect_slice(struct cfs_rq *cfs_rq, struct sched_entity 
 	if (sched_feat(RUN_TO_PARITY))
 		slice = cfs_rq_min_slice(cfs_rq);
 
-	slice = min(slice, se->slice);
+	slice = min(slice, (u64)se->slice);
 	if (slice != se->slice)
 		vprot = min_vruntime(vprot, se->vruntime + calc_delta_fair(slice, se));
 
