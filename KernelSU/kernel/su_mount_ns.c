@@ -6,11 +6,16 @@
 #include <linux/fs_struct.h>
 #include <linux/limits.h>
 #include <linux/namei.h>
-#include <linux/proc_ns.h>
 #include <linux/pid.h>
 #include <linux/slab.h>
 #include <linux/syscalls.h>
 #include <linux/version.h>
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 0)
+#include <linux/proc_ns.h>
+#else
+#include <linux/proc_fs.h>
+#endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0)
 #include <linux/sched/task.h>
@@ -18,10 +23,12 @@
 #include <linux/sched.h>
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
 #include <uapi/linux/mount.h>
 #else
 #include <uapi/linux/fs.h>
+#endif
 #endif
 
 extern int path_mount(const char *dev_name, struct path *path,
@@ -140,7 +147,12 @@ try_setns:
 		pr_warn("failed get path for init mount namespace: %ld\n", ret);
 		goto out;
 	}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
 	struct file *ns_file = dentry_open(&ns_path, O_RDONLY, ksu_cred);
+#else
+	struct file *ns_file = dentry_open(ns_path.dentry, ns_path.mnt, O_RDONLY, ksu_cred);
+#endif
 
 	path_put(&ns_path);
 	if (IS_ERR(ns_file)) {

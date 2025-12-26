@@ -148,5 +148,6 @@ void ksu_supercalls_exit(void);
 #define KSU_UMOUNT_GETSIZE 107   // get list size // shit is u8 we cant fit 10k+ on it
 #define KSU_UMOUNT_GETLIST 108   // get list
 #define GET_SULOG_DUMP 10009     // get sulog dump, max, last 100 escalations
+#define GET_SULOG_DUMP_V2 10010     // get sulog dump, timestamped, last 250 escalations
 
 #endif // __KSU_H_SUPERCALLS

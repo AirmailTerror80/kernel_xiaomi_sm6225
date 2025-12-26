@@ -39,7 +39,7 @@ __weak int close_fd(unsigned fd)
 }
 #endif
 
-extern long ksu_copy_from_user_nofault(void *dst, const void __user *src, size_t size);
+extern long copy_from_user_nofault(void *dst, const void __user *src, size_t size);
 
 /*
  * ksu_copy_from_user_retry
@@ -49,10 +49,9 @@ extern long ksu_copy_from_user_nofault(void *dst, const void __user *src, size_t
  * + hot since this is reused on sucompat
  */
 __attribute__((hot))
-static long ksu_copy_from_user_retry(void *to, 
-		const void __user *from, unsigned long count)
+static long ksu_copy_from_user_retry(void *to, const void __user *from, unsigned long count)
 {
-	long ret = ksu_copy_from_user_nofault(to, from, count);
+	long ret = copy_from_user_nofault(to, from, count);
 	if (likely(!ret))
 		return ret;
 

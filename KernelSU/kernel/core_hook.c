@@ -83,15 +83,6 @@ static const struct ksu_feature_handler enhanced_security_handler = {
 	.set_handler = enhanced_security_feature_set,
 };
 
-static inline bool is_allow_su()
-{
-	if (is_manager()) {
-	    // we are manager, allow!
-	    return true;
-	}
-	return ksu_is_allow_uid_for_current(current_uid().val);
-}
-
 LSM_HANDLER_TYPE ksu_handle_rename(struct dentry *old_dentry, struct dentry *new_dentry)
 {
 	if (!current->mm) {
@@ -227,17 +218,13 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 	// we dont have those new fancy things upstream has
 	// lets just do original thing where we disable seccomp
 	if (ksu_get_manager_appid() == new_uid % PER_USER_RANGE) {
-		spin_lock_irq(&current->sighand->siglock);
 		disable_seccomp();
-		spin_unlock_irq(&current->sighand->siglock);
 		pr_info("install fd for: %d\n", new_uid);
 		ksu_install_fd(); // install fd for ksu manager
 	}
 
 	if (unlikely(ksu_is_allow_uid_for_current(new_uid))) {
-		spin_lock_irq(&current->sighand->siglock);
 		disable_seccomp();
-		spin_unlock_irq(&current->sighand->siglock);
 		return 0;
 	}
 

@@ -349,18 +349,15 @@ static void throne_tracker_fn(bool prune_only)
 	loff_t line_start = 0;
 	char buf[KSU_MAX_PACKAGE_NAME];
 	for (;;) {
-		ssize_t count =
-			ksu_kernel_read_compat(fp, &chr, sizeof(chr), &pos);
+		ssize_t count = ksu_kernel_read_compat(fp, &chr, sizeof(chr), &pos);
 		if (count != sizeof(chr))
 			break;
 		if (chr != '\n')
 			continue;
 
-		count = ksu_kernel_read_compat(fp, buf, sizeof(buf),
-					       &line_start);
+		count = ksu_kernel_read_compat(fp, buf, sizeof(buf), &line_start);
 
-		struct uid_data *data =
-			kzalloc(sizeof(struct uid_data), GFP_ATOMIC);
+		struct uid_data *data = kzalloc(sizeof(struct uid_data), GFP_ATOMIC);
 		if (!data) {
 			filp_close(fp, 0);
 			goto out;

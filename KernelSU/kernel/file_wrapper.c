@@ -21,11 +21,27 @@ struct ksu_file_wrapper {
 
 static struct ksu_file_wrapper *ksu_create_file_wrapper(struct file *fp);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 13, 0)
+#ifndef replace_fops
+#define replace_fops(f, fops) \
+	do {	\
+		struct file *__file = (f); \
+		fops_put(__file->f_op); \
+		BUG_ON(!(__file->f_op = (fops))); \
+	} while(0)
+#endif
+#endif
+
 static int ksu_wrapper_open(struct inode *ino, struct file *fp)
 {
 	struct path *orig_path = fp->f_path.dentry->d_fsdata;
-	struct file *orig_file =
-		dentry_open(orig_path, fp->f_flags, current_cred());
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
+	struct file *orig_file = dentry_open(orig_path, fp->f_flags, current_cred());
+#else
+	struct file *orig_file = dentry_open((*orig_path).dentry, (*orig_path).mnt, fp->f_flags, current_cred());
+#endif
+
 	if (IS_ERR(orig_file)) {
 		return PTR_ERR(orig_file);
 	}
@@ -463,8 +479,6 @@ static struct inode *
 ksu_anon_inode_make_secure_inode(const char *name, const struct inode *context_inode)
 {
 	struct inode *inode;
-	// const struct qstr qname = QSTR_INIT(name, strlen(name));
-	// int error;
 
 	if (unlikely(!anon_inode_mnt)) {
 		return ERR_PTR(-ENODEV);
@@ -474,14 +488,6 @@ ksu_anon_inode_make_secure_inode(const char *name, const struct inode *context_i
 	if (IS_ERR(inode))
 		return inode;
 	inode->i_flags &= ~S_PRIVATE;
-
-#if 0
-	error = security_inode_init_security_anon(inode, &qname, context_inode);
-	if (error) {
-		iput(inode);
-		return ERR_PTR(error);
-	}
-#endif
 
 	return inode;
 }

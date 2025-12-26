@@ -342,7 +342,6 @@ static int ksu_get_task_mark(pid_t pid)
 	struct task_struct *task;
 	int ret = -ESRCH;
 
-#ifdef CONFIG_SECCOMP
 	rcu_read_lock();
 	task = find_task_by_vpid(pid);
 	if (!task) {
@@ -352,7 +351,6 @@ static int ksu_get_task_mark(pid_t pid)
 
 	ret = !task->seccomp.mode;
 	rcu_read_unlock();
-#endif // its useless to do all these when seccomp is NOT even compiled.
 
 	return ret;
 }
@@ -698,13 +696,17 @@ int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user 
 		return 0;
 	}
 	
-	if (magic2 == GET_SULOG_DUMP) {
+	if (magic2 == GET_SULOG_DUMP_V2) {
 		// only root is allowed for this command
 		if (current_uid().val != 0)
 			return 0;
 
-		send_sulog_dump(*arg);
-		return 0;
+		int ret = send_sulog_dump(*arg);
+		if (ret)
+			return 0;
+
+		if (copy_to_user((void __user *)*arg, &reply, sizeof(reply) ))
+			return 0;
 	}
 	
 
@@ -719,6 +721,9 @@ void ksu_supercalls_init(void)
 	for (i = 0; ksu_ioctl_handlers[i].handler; i++) {
 		pr_info("  %-18s = 0x%08x\n", ksu_ioctl_handlers[i].name, ksu_ioctl_handlers[i].cmd);
 	}
+
+	sulog_init_heap(); // grab heap memory for sulog
+
 }
 
 void ksu_supercalls_exit(void){}
