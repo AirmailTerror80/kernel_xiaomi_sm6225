@@ -3,7 +3,7 @@ menu "KernelSU"
 config KSU
 	select SECCOMP
 	bool "KernelSU function support"
-	default y
+	default n
 	help
 	  Enable kernel-level root privileges on Android System.
 
