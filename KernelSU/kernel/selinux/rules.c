@@ -63,10 +63,11 @@ void apply_kernelsu_rules()
 	}
 
 	// our ksud triggered by init
-	// restore this as we dont really have a way to escape "before" ksud executes 
+	ksu_allow(db, "init", KERNEL_SU_DOMAIN, ALL, ALL);
+
+	// restored from https://github.com/tiann/KernelSU/pull/3031 
 	ksu_allow(db, "init", "adb_data_file", "file", ALL);
 	ksu_allow(db, "init", "adb_data_file", "dir", ALL); // #1289
-	ksu_allow(db, "init", KERNEL_SU_DOMAIN, ALL, ALL);
 
 	// copied from Magisk rules
 	// suRights

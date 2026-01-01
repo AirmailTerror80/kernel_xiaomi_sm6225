@@ -39,7 +39,6 @@
 #endif
 
 static bool ksu_kernel_umount_enabled = true;
-static bool ksu_enhanced_security_enabled = false;
 
 static int kernel_umount_feature_get(u64 *value)
 {
@@ -60,27 +59,6 @@ static const struct ksu_feature_handler kernel_umount_handler = {
 	.name = "kernel_umount",
 	.get_handler = kernel_umount_feature_get,
 	.set_handler = kernel_umount_feature_set,
-};
-
-static int enhanced_security_feature_get(u64 *value)
-{
-	*value = ksu_enhanced_security_enabled ? 1 : 0;
-	return 0;
-}
-
-static int enhanced_security_feature_set(u64 value)
-{
-	bool enable = value != 0;
-	ksu_enhanced_security_enabled = enable;
-	pr_info("enhanced_security: set to %d\n", enable);
-	return 0;
-}
-
-static const struct ksu_feature_handler enhanced_security_handler = {
-	.feature_id = KSU_FEATURE_ENHANCED_SECURITY,
-	.name = "enhanced_security",
-	.get_handler = enhanced_security_feature_get,
-	.set_handler = enhanced_security_feature_set,
 };
 
 LSM_HANDLER_TYPE ksu_handle_rename(struct dentry *old_dentry, struct dentry *new_dentry)
@@ -172,15 +150,6 @@ static void try_umount(const char *mnt, int flags)
 	ksu_umount_mnt(mnt, &path, flags);
 }
 
-static inline void ksu_force_sig(int sig)
-{
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0) 
-	force_sig(sig);
-#else
-	force_sig(sig, current);
-#endif
-}
-
 LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 {
 	if (!new || !old) {
@@ -189,35 +158,14 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 
 	uid_t new_uid = new->uid.val;
 	uid_t old_uid = old->uid.val;
-	uid_t new_euid = new->euid.val;
-	uid_t old_euid = old->euid.val;
 
-	if (0 != old_uid && ksu_enhanced_security_enabled) {
-		// disallow any non-ksu domain escalation from non-root to root!
-		if (unlikely(new_euid) == 0 && !is_ksu_domain()) {
-			pr_warn("find suspicious EoP: %d %s, from %d to %d\n", current->pid, current->comm, old_uid, new_uid);
-			ksu_force_sig(SIGKILL);
-			return 0;
-		}
-		// disallow appuid decrease to any other uid if it is not allowed to su
-		if (is_appuid(old_uid)) {
-			if (new_euid < old_euid && !ksu_is_allow_uid_for_current(old_uid)) {
-				pr_warn("find suspicious EoP: %d %s, from %d to %d\n", current->pid, current->comm, old_euid, new_euid);
-				ksu_force_sig(SIGKILL);
-				return 0;
-			}
-		}
-
-		return 0;
-	}
-	
 	// old process is not root, ignore it.
 	if (0 != old_uid)
 		return 0;
 
 	// we dont have those new fancy things upstream has
 	// lets just do original thing where we disable seccomp
-	if (ksu_get_manager_appid() == new_uid % PER_USER_RANGE) {
+	if (likely(ksu_is_manager_appid_valid()) && unlikely(ksu_get_manager_appid() == new_uid % PER_USER_RANGE)) {
 		disable_seccomp();
 		pr_info("install fd for: %d\n", new_uid);
 		ksu_install_fd(); // install fd for ksu manager
@@ -301,6 +249,20 @@ LSM_HANDLER_TYPE ksu_bprm_check(struct linux_binprm *bprm)
 	return 0;
 }
 
+
+extern bool ksu_vfs_read_hook __read_mostly;
+extern int ksu_handle_initrc(struct file **file_ptr);
+
+LSM_HANDLER_TYPE ksu_file_permission(struct file *file, int mask)
+{
+	if (!ksu_vfs_read_hook)
+		return 0;
+
+	ksu_handle_initrc(&file);
+
+	return 0;
+}
+
 // dummy
 #ifndef CONFIG_KSU_LSM_SECURITY_HOOKS
 #include <linux/key.h>
@@ -328,6 +290,7 @@ static struct security_hook_list ksu_hooks[] = {
 	LSM_HOOK_INIT(inode_rename, ksu_inode_rename),
 	LSM_HOOK_INIT(task_fix_setuid, ksu_task_fix_setuid),
 	LSM_HOOK_INIT(bprm_check_security, ksu_bprm_check),
+	LSM_HOOK_INIT(file_permission, ksu_file_permission),
 };
 
 void __init ksu_lsm_hook_init(void)
@@ -348,8 +311,5 @@ void __init ksu_core_init(void)
 	ksu_lsm_hook_init();
 	if (ksu_register_feature_handler(&kernel_umount_handler)) {
 		pr_err("Failed to register kernel_umount feature handler\n");
-	}
-	if (ksu_register_feature_handler(&enhanced_security_handler)) {
-		pr_err("Failed to register enhanced security feature handler\n");
 	}
 }

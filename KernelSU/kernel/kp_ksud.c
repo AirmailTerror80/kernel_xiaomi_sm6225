@@ -9,25 +9,6 @@
 
 static struct task_struct *unregister_thread;
 
-// vfs_read
-extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
-			size_t *count_ptr, loff_t **pos);
-
-static int vfs_read_handler_pre(struct kprobe *p, struct pt_regs *regs)
-{
-	struct file **file_ptr = (struct file **)&PT_REGS_PARM1(regs);
-	char __user **buf_ptr = (char **)&PT_REGS_PARM2(regs);
-	size_t *count_ptr = (size_t *)&PT_REGS_PARM3(regs);
-	loff_t **pos_ptr = (loff_t **)&PT_REGS_CCALL_PARM4(regs);
-
-	return ksu_handle_vfs_read(file_ptr, buf_ptr, count_ptr, pos_ptr);
-}
-
-static struct kprobe vfs_read_kp = {
-	.symbol_name = "vfs_read",
-	.pre_handler = vfs_read_handler_pre,
-};
-
 // input_event
 extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);
 
@@ -161,7 +142,6 @@ static int unregister_kprobe_function(void *data)
 	//pr_info("kp_ksud: unregistering kprobes...\n");
 
 	unregister_kprobe_logged(&input_event_kp);
-	unregister_kprobe_logged(&vfs_read_kp);
 	
 	unregister_thread = NULL;
 	
@@ -189,6 +169,5 @@ void kp_ksud_init()
 	// dont unreg this one
 	register_kprobe_logged(&sys_reboot_kp);
 
-	register_kprobe_logged(&vfs_read_kp);
 	register_kprobe_logged(&input_event_kp);
 }

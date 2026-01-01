@@ -9,8 +9,8 @@ MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 $(info -- KDIR: $(KDIR))
 $(info -- MDIR: $(MDIR))
 
-# compliant to last upstream kernel change as of 07d9401
-ccflags-y += -DKSU_VERSION=32238
+# compliant to last upstream kernel change as of 1b6e2ed
+ccflags-y += -DKSU_VERSION=32258
 
 ifeq ($(shell grep -q " current_sid(void)" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
 ccflags-y += -DKSU_COMPAT_HAS_CURRENT_SID
@@ -59,16 +59,6 @@ endif
 ifeq ($(shell grep -q "int path_umount" $(srctree)/fs/namespace.c; echo $$?),0)
 $(info -- KernelSU/compat: path_umount found)
 ccflags-y += -DKSU_HAS_PATH_UMOUNT
-endif
-
-ifeq ($(shell grep -q "ssize_t kernel_read" $(srctree)/fs/read_write.c; echo $$?),0)
-$(info -- KernelSU/compat: newer kernel_read found)
-ccflags-y += -DKSU_NEW_KERNEL_READ
-endif
-
-ifeq ($(shell grep "ssize_t kernel_write" $(srctree)/fs/read_write.c | grep -q "const void" ; echo $$?),0)
-$(info -- KernelSU/compat: newer kernel_write found)
-ccflags-y += -DKSU_NEW_KERNEL_WRITE
 endif
 
 ifeq ($(shell grep -q "selinux_inode" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
