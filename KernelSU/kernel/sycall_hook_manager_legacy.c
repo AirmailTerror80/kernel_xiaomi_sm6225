@@ -27,8 +27,8 @@ static syscall_fn_t old_execve; // const char __user * filename, const char __us
 static long hook_sys_execve(const struct pt_regs *regs)
 {
 	const char __user *filename = (const char __user *)regs->regs[0];
-	volatile const char __user *const __user *argv = (volatile const char __user *const __user *)regs->regs[1];
-	volatile const char __user *const __user *envp = (volatile const char __user *const __user *)regs->regs[2];
+	const char __user *const __user *argv = (const char __user *const __user *)regs->regs[1];
+	const char __user *const __user *envp = (const char __user *const __user *)regs->regs[2];
 
 	ksu_handle_execve_sucompat((int *)AT_FDCWD, &filename, NULL, NULL, NULL);
 	return old_execve(regs);
@@ -53,7 +53,7 @@ static long hook_sys_newfstatat(const struct pt_regs *regs)
 {
 	int dfd = (int)regs->regs[0];
 	const char __user *filename = (const char __user *)regs->regs[1];
-	volatile struct stat __user *statbuf = (volatile struct stat __user *)regs->regs[2];
+	struct stat __user *statbuf = (struct stat __user *)regs->regs[2];
 	int flag = (int)regs->regs[3];
 
 	ksu_handle_stat(&dfd, &filename, &flag);
@@ -67,7 +67,7 @@ static long hook_sys_fstatat64(const struct pt_regs *regs)
 {
 	int dfd = (int)regs->regs[0];
 	const char __user *filename = (const char __user *)regs->regs[1];
-	volatile struct stat64 __user *statbuf = (volatile struct stat64 __user *)regs->regs[2];
+	struct stat64 __user *statbuf = (struct stat64 __user *)regs->regs[2];
 	int flag = (int)regs->regs[3];
 
 	ksu_handle_stat(&dfd, &filename, &flag);

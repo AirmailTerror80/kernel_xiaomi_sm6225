@@ -9,6 +9,7 @@
 
 static struct task_struct *unregister_thread;
 
+#if 0
 // input_event
 extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);
 
@@ -26,6 +27,7 @@ static struct kprobe input_event_kp = {
 	.symbol_name = "input_event",
 	.pre_handler = input_handle_event_handler_pre,
 };
+#endif
 
 // security_bounded_transition
 #if defined(CONFIG_KRETPROBES) && LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
@@ -48,9 +50,6 @@ static int bounded_transition_ret_handler(struct kretprobe_instance *ri, struct 
 	u32 *sid = (u32 *)ri->data;
 	u32 old_sid = sid[0];
 	u32 new_sid = sid[1];
-
-	if (!ss_initialized)
-		return 0;
 
 	// so if old sid is 'init' and trying to transition to a new sid of 'su'
 	// force the function to return 0 
@@ -107,7 +106,7 @@ void kp_ksud_transition_routine_start()
 }
 #endif // security_bounded_transition
 
-// sys_reboot
+#ifndef CONFIG_KSU_TAMPER_SYSCALL_TABLE // sys_reboot
 extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);
 
 static int sys_reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
@@ -125,6 +124,7 @@ static struct kprobe sys_reboot_kp = {
 	.symbol_name = SYS_REBOOT_SYMBOL,
 	.pre_handler = sys_reboot_handler_pre,
 };
+#endif
 
 static void unregister_kprobe_logged(struct kprobe *kp)
 {
@@ -141,7 +141,7 @@ static int unregister_kprobe_function(void *data)
 {
 	//pr_info("kp_ksud: unregistering kprobes...\n");
 
-	unregister_kprobe_logged(&input_event_kp);
+	// unregister_kprobe_logged(&input_event_kp);
 	
 	unregister_thread = NULL;
 	
@@ -166,8 +166,9 @@ static void register_kprobe_logged(struct kprobe *kp)
 
 void kp_ksud_init()
 {
-	// dont unreg this one
-	register_kprobe_logged(&sys_reboot_kp);
+#ifndef CONFIG_KSU_TAMPER_SYSCALL_TABLE
+	register_kprobe_logged(&sys_reboot_kp); // dont unreg this one
+#endif
 
-	register_kprobe_logged(&input_event_kp);
+	// register_kprobe_logged(&input_event_kp);
 }

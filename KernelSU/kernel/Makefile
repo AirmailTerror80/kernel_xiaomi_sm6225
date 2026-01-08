@@ -9,8 +9,8 @@ MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 $(info -- KDIR: $(KDIR))
 $(info -- MDIR: $(MDIR))
 
-# compliant to last upstream kernel change as of 1b6e2ed
-ccflags-y += -DKSU_VERSION=32258
+# compliant to last upstream kernel change as of 84f0f02
+ccflags-y += -DKSU_VERSION=32264
 
 ifeq ($(shell grep -q " current_sid(void)" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
 ccflags-y += -DKSU_COMPAT_HAS_CURRENT_SID
@@ -77,6 +77,6 @@ ccflags-y += -DKSU_UL_HAS_FILE_INODE
 endif
 
 ccflags-y += -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
-ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
+ccflags-y += -Wno-declaration-after-statement -Wno-unused-function -Wno-format
 
 # Keep a new line here!! Because someone may append config
