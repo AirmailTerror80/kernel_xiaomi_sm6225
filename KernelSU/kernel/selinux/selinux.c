@@ -51,7 +51,7 @@ void setup_selinux(const char *domain)
 	}
 }
 
-void setup_ksu_cred()
+void setup_ksu_cred(void)
 {
 	if (ksu_cred && transive_to_domain(KERNEL_SU_CONTEXT, ksu_cred)) {
 		pr_err("setup ksu cred failed.\n");
@@ -69,7 +69,7 @@ void setenforce(bool enforce)
 #endif
 }
 
-bool getenforce()
+bool getenforce(void)
 {
 #ifdef CONFIG_SECURITY_SELINUX_DISABLE
 #ifdef KSU_COMPAT_USE_SELINUX_STATE
@@ -181,8 +181,7 @@ static bool is_sid_match(const struct cred *cred, u32 cached_sid, const char *fa
 	// Slow path fallback: string comparison (only before cache is initialized)
 	struct lsm_context ctx;
 	bool result;
-	int err = __security_secid_to_secctx(tsec->sid, &ctx);
-	if (err) {
+	if (__security_secid_to_secctx(tsec->sid, &ctx)) {
 		return false;
 	}
 	result = strncmp(fallback_context, ctx.context, ctx.len) == 0;
@@ -195,7 +194,7 @@ bool is_task_ksu_domain(const struct cred *cred)
 	return is_sid_match(cred, cached_su_sid, KERNEL_SU_CONTEXT);
 }
 
-bool is_ksu_domain()
+bool is_ksu_domain(void)
 {
 	return is_task_ksu_domain(current_cred());
 }

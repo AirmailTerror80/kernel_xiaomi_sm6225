@@ -37,7 +37,7 @@ static inline int install_session_keyring(struct key *keyring)
 
 // this is on tgcred on < 3.8
 // while we can grab that one, it seems to not actually be needed 
-void ksu_grab_init_session_keyring(const char *filename)
+static void ksu_grab_init_session_keyring(const char *filename)
 {
 	if (init_session_keyring)
 		return;

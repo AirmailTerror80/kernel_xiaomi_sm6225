@@ -6,6 +6,14 @@
 #include <generated/compile.h>
 #include <linux/version.h> /* LINUX_VERSION_CODE, KERNEL_VERSION macros */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0)
+#include <uapi/asm-generic/errno.h>
+#else
+#include <asm-generic/errno.h>
+#endif
+
+#define ksu_get_uid_t(x) *(unsigned int *)&(x)
+
 #include "allowlist.h"
 #include "apk_sign.h"
 #include "app_profile.h"
@@ -56,7 +64,7 @@
 #include "selinux/rules.c"
 
 #ifdef CONFIG_KSU_TAMPER_SYSCALL_TABLE
-#include "sycall_hook_manager_legacy.c"
+#include "syscall_table_hook.c"
 #endif
 
 #ifdef CONFIG_KSU_KPROBES_KSUD
@@ -85,7 +93,7 @@ extern void ksu_supercalls_init();
 #endif
 
 #if defined(CONFIG_KSU_KRETPROBES_SUCOMPAT)
-	#define FEAT_2 " +kretprobes_sucompat"
+	#define FEAT_2 " +rp_sucompat"
 #else
 	#define FEAT_2 ""
 #endif
@@ -94,18 +102,23 @@ extern void ksu_supercalls_init();
 #else
 	#define FEAT_3 ""
 #endif
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0) && !defined(CONFIG_KSU_LSM_SECURITY_HOOKS)
-	#define FEAT_4 " -lsm_hooks"
+#if defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
+	#define FEAT_4 " +sys_call_table_hook"
 #else
 	#define FEAT_4 ""
 #endif
-#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)) && defined(KSU_HAS_PATH_UMOUNT)
-	#define FEAT_5 " +path_umount"
+#if !defined(CONFIG_KSU_LSM_SECURITY_HOOKS)
+	#define FEAT_5 " -lsm_hooks"
 #else
 	#define FEAT_5 ""
 #endif
+#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)) && defined(KSU_HAS_PATH_UMOUNT)
+	#define FEAT_6 " +path_umount"
+#else
+	#define FEAT_6 ""
+#endif
 
-#define EXTRA_FEATURES FEAT_1 FEAT_2 FEAT_3 FEAT_4 FEAT_5
+#define EXTRA_FEATURES FEAT_1 FEAT_2 FEAT_3 FEAT_4 FEAT_5 FEAT_6
 
 int __init kernelsu_init(void)
 {

@@ -15,11 +15,6 @@
 #include <linux/sched.h>
 #include <linux/stddef.h>
 #include <linux/binfmts.h>
-
-#ifdef CONFIG_KSU_LSM_SECURITY_HOOKS
-#include <linux/lsm_hooks.h>
-#endif
-
 #include <linux/nsproxy.h>
 #include <linux/path.h>
 #include <linux/printk.h>
@@ -68,7 +63,8 @@ LSM_HANDLER_TYPE ksu_handle_rename(struct dentry *old_dentry, struct dentry *new
 		return 0;
 	}
 
-	if (current_uid().val != 1000) {
+	kuid_t current_uid = current_uid();
+	if (ksu_get_uid_t(current_uid) != 1000) {
 		// skip non system uid
 		return 0;
 	}
@@ -156,8 +152,8 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 		return 0;
 	}
 
-	uid_t new_uid = new->uid.val;
-	uid_t old_uid = old->uid.val;
+	uid_t new_uid = ksu_get_uid_t(new->uid);
+	uid_t old_uid = ksu_get_uid_t(old->uid);
 
 	// old process is not root, ignore it.
 	if (0 != old_uid)
@@ -232,7 +228,7 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
-extern void ksu_grab_init_session_keyring(const char *filename);
+static void ksu_grab_init_session_keyring(const char *filename);
 #endif
 
 LSM_HANDLER_TYPE ksu_bprm_check(struct linux_binprm *bprm)
@@ -249,29 +245,18 @@ LSM_HANDLER_TYPE ksu_bprm_check(struct linux_binprm *bprm)
 	return 0;
 }
 
-
-extern bool ksu_vfs_read_hook __read_mostly;
-extern int ksu_handle_initrc(struct file **file_ptr);
+bool ksu_vfs_read_hook __read_mostly;
+static void ksu_handle_initrc(struct file *file);
 
 LSM_HANDLER_TYPE ksu_file_permission(struct file *file, int mask)
 {
 	if (!ksu_vfs_read_hook)
 		return 0;
 
-	ksu_handle_initrc(&file);
+	ksu_handle_initrc(file);
 
 	return 0;
 }
-
-// dummy
-#ifndef CONFIG_KSU_LSM_SECURITY_HOOKS
-#include <linux/key.h>
-int ksu_key_permission(key_ref_t key_ref, const struct cred *cred,
-			      unsigned perm)
-{
-	return 0;
-}
-#endif
 
 #ifdef CONFIG_KSU_LSM_SECURITY_HOOKS
 static int ksu_inode_rename(struct inode *old_inode, struct dentry *old_dentry,
@@ -286,6 +271,8 @@ static int ksu_task_fix_setuid(struct cred *new, const struct cred *old,
 	return ksu_handle_setuid(new, old);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0)
+#include <linux/lsm_hooks.h>
 static struct security_hook_list ksu_hooks[] = {
 	LSM_HOOK_INIT(inode_rename, ksu_inode_rename),
 	LSM_HOOK_INIT(task_fix_setuid, ksu_task_fix_setuid),
@@ -293,18 +280,157 @@ static struct security_hook_list ksu_hooks[] = {
 	LSM_HOOK_INIT(file_permission, ksu_file_permission),
 };
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
+static void ksu_lsm_hook_init(void)
+{
+	security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks), "ksu");
+}
+
+#else
+static void ksu_lsm_hook_init(void)
+{
+	security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks));
+}
+#endif //  < 4.11
+
+#else // 4.2
+
+// selinux_ops (LSM), security_operations struct tampering for ultra legacy
+
+extern struct security_operations selinux_ops;
+
+static int (*orig_inode_rename) (struct inode *old_dir, struct dentry *old_dentry,
+			     struct inode *new_dir, struct dentry *new_dentry);
+static int hook_inode_rename(struct inode *old_inode, struct dentry *old_dentry,
+			    struct inode *new_inode, struct dentry *new_dentry)
+{
+	ksu_inode_rename(old_inode, old_dentry, new_inode, new_dentry);
+	return orig_inode_rename(old_inode, old_dentry, new_inode, new_dentry);
+}
+
+static int (*orig_task_fix_setuid) (struct cred *new, const struct cred *old, int flags);
+static int hook_task_fix_setuid(struct cred *new, const struct cred *old, int flags)
+{
+	ksu_task_fix_setuid(new, old, flags);
+	return orig_task_fix_setuid(new, old, flags);
+}
+
+static int (*orig_bprm_check_security)(struct linux_binprm *bprm);
+static int hook_bprm_check_security(struct linux_binprm *bprm)
+{
+	ksu_bprm_check(bprm);
+	return orig_bprm_check_security(bprm);
+}
+
+static int (*orig_file_permission) (struct file *file, int mask);
+static int hook_file_permission(struct file *file, int mask)
+{
+
+	ksu_file_permission(file, mask);
+	return orig_file_permission(file, mask);
+}
+
+static void ksu_lsm_hook_restore(void)
+{
+	struct security_operations *ops = (struct security_operations *)&selinux_ops;
+
+	if (!ops)
+		return;
+
+	if (!!strcmp(ops, "selinux"))
+		return;
+
+	// TODO: maybe hunt for this in memory instead of exporting
+	// this is the first member of the struct so it points to the struct
+	pr_info("%s: selinux_ops: 0x%lx .name = %s\n", __func__, (long)ops, (const char *)ops );
+
+	preempt_disable();
+
+	if (orig_bprm_check_security) {
+		pr_info("%s: restoring: 0x%lx to 0x%lx\n", __func__, (long)ops->bprm_check_security, (long)orig_bprm_check_security);
+		ops->bprm_check_security = orig_bprm_check_security;
+	}
+
+	if (orig_file_permission) {
+		pr_info("%s: restoring: 0x%lx to 0x%lx\n", __func__, (long)ops->file_permission, (long)orig_file_permission);
+		ops->file_permission = orig_file_permission;
+	}
+
+	preempt_enable();
+	
+	smp_mb();
+	return;
+}
+
+static struct task_struct *unhook_thread;
+
+static int execveat_hook_wait_fn(void *data)
+{
+loop_start:
+
+	msleep(1000);
+
+	if ((volatile bool)ksu_execveat_hook)
+		goto loop_start;
+
+	ksu_lsm_hook_restore();
+
+	return 0;
+}
+
+static void execveat_hook_wait_thread()
+{
+	unhook_thread = kthread_run(execveat_hook_wait_fn, NULL, "unhook");
+	if (IS_ERR(unhook_thread)) {
+		unhook_thread = NULL;
+		return;
+	}
+}
+
+static void ksu_lsm_hook_init(void)
+{
+	struct security_operations *ops = (struct security_operations *)&selinux_ops;
+
+	if (!ops)
+		return;
+
+	if (!!strcmp(ops, "selinux"))
+		return;
+
+	// TODO: maybe hunt for this in memory instead of exporting
+	// this is the first member of the struct so it points to the struct
+	pr_info("%s: selinux_ops: 0x%lx .name = %s\n", __func__, (long)ops, (const char *)ops );
+
+	preempt_disable();
+
+	orig_inode_rename = ops->inode_rename;
+	ops->inode_rename = hook_inode_rename;
+
+	orig_task_fix_setuid = ops->task_fix_setuid;
+	ops->task_fix_setuid = hook_task_fix_setuid;
+
+	orig_bprm_check_security = ops->bprm_check_security;
+	ops->bprm_check_security = hook_bprm_check_security;
+
+	orig_file_permission = ops->file_permission;
+	ops->file_permission = hook_file_permission;
+
+	preempt_enable();
+	
+	smp_mb();
+
+	execveat_hook_wait_thread();
+	return;
+}
+
+#endif // < 4.2
+
+#else
 void __init ksu_lsm_hook_init(void)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
-	security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks), "ksu");
-#else
-	// https://elixir.bootlin.com/linux/v4.10.17/source/include/linux/lsm_hooks.h#L1892
-	security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks));
-#endif
+	// nothing, no-op
 }
-#else
-void __init ksu_lsm_hook_init(void) {}
-#endif //CONFIG_KSU_LSM_SECURITY_HOOKS
+#endif // CONFIG_KSU_LSM_SECURITY_HOOKS
 
 void __init ksu_core_init(void)
 {

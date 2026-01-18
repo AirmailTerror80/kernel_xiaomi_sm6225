@@ -6,11 +6,14 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/version.h>
+#include <linux/kthread.h>
 #include <linux/input.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
 #include <linux/input-event-codes.h>
-#else
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0)
 #include <uapi/linux/input.h>
+#else
+#include <linux/input.h>
 #endif
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 1, 0)
 #include <linux/aio.h>
@@ -33,19 +36,6 @@ bool ksu_boot_completed __read_mostly = false;
 extern void ksu_avc_spoof_late_init();
 #else
 void ksu_avc_spoof_late_init() {}
-#endif
-
-#ifdef CONFIG_KSU_KPROBES_KSUD
-extern void unregister_kprobe_thread();
-#endif
-
-#if defined(CONFIG_KRETPROBES) && defined(CONFIG_KSU_KPROBES_KSUD) && \
-	LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
-extern void kp_ksud_transition_routine_start();
-extern void kp_ksud_transition_routine_end();
-#else
-void kp_ksud_transition_routine_start() {}
-void kp_ksud_transition_routine_end() {}
 #endif
 
 static const char KERNEL_SU_RC[] =
@@ -135,7 +125,6 @@ void on_boot_completed(void)
 	ksu_boot_completed = true;
 	pr_info("on_boot_completed!\n");
 	track_throne(true);
-	kp_ksud_transition_routine_end(); // security_bounded_transition rp
 	ksu_avc_spoof_late_init(); // slow_avc_init kp
 }
 
@@ -223,9 +212,6 @@ static int ksu_handle_bprm_ksud(const char *filename, const char *argv1, const c
 	}
 
 first_app_process:
-	if (init_second_stage_executed)
-		kp_ksud_transition_routine_start();
-
 	if (first_app_process && strstarts(filename, app_process)) {
 		first_app_process = false;
 		pr_info("%s: exec app_process, /data prepared, second_stage: %d\n", __func__, init_second_stage_executed);
@@ -364,46 +350,49 @@ append_ksu_rc:
 }
 #endif
 
-
-int ksu_handle_initrc(struct file **file_ptr)
+static bool is_init_rc(struct file *fp)
 {
-	struct file *file;
-
-	if (!ksu_vfs_read_hook) {
-		return 0;
-	}
-
-	if (!is_init(get_current_cred()))
-		return 0;
-
 	if (strcmp(current->comm, "init")) {
 		// we are only interest in `init` process
-		return 0;
+		return false;
 	}
 
-	file = *file_ptr;
-	if (IS_ERR(file)) {
-		return 0;
+	if (!S_ISREG(fp->f_path.dentry->d_inode->i_mode)) {
+		return false;
 	}
 
-	if (!S_ISREG(file->f_path.dentry->d_inode->i_mode)) {
-		return 0;
-	}
-
-	const char *short_name = file->f_path.dentry->d_name.name;
+	const char *short_name = fp->f_path.dentry->d_name.name;
 	if (strcmp(short_name, "init.rc")) {
 		// we are only interest `init.rc` file name file
-		return 0;
+		return false;
 	}
-	char path[256];
-	char *dpath = d_path(&file->f_path, path, sizeof(path));
+	char path[256] = {0};
+	char *dpath = d_path(&fp->f_path, path, sizeof(path));
 
 	if (IS_ERR(dpath)) {
-		return 0;
+		return false;
 	}
 
 	if (!!strcmp(dpath, "/init.rc") && !!strcmp(dpath, "/system/etc/init/hw/init.rc")) {
-		return 0;
+		return false;
+	}
+
+	pr_info("%s: %s \n", __func__, dpath);
+
+	return true;
+}
+
+static void ksu_handle_initrc(struct file *file)
+{
+	if (!ksu_vfs_read_hook) {
+		return;
+	}
+
+	if (!is_init(get_current_cred()))
+		return;
+
+	if (!is_init_rc(file)) {
+		return;
 	}
 
 	// we only process the first read
@@ -411,14 +400,14 @@ int ksu_handle_initrc(struct file **file_ptr)
 	if (rc_hooked) {
 		// we don't need this kprobe, unregister it!
 		stop_vfs_read_hook();
-		return 0;
+		return;
 	}
 	rc_hooked = true;
 
 	// now we can sure that the init process is reading
 	// `/system/etc/init/init.rc`
 
-	pr_info("vfs_read: %s, comm: %s, rc_count: %zu\n", dpath, current->comm, ksu_rc_len);
+	pr_info("read init.rc, comm: %s, rc_count: %zu\n", current->comm, ksu_rc_len);
 
 	// Now we need to proxy the read and modify the result!
 	// But, we can not modify the file_operations directly, because it's in read-only memory.
@@ -437,73 +426,192 @@ int ksu_handle_initrc(struct file **file_ptr)
 	// replace the file_operations
 	file->f_op = &fops_proxy;
 
-	return 0;
+	return;
 }
 
+// NOTE: https://github.com/tiann/KernelSU/commit/df640917d11dd0eff1b34ea53ec3c0dc49667002
+// - added 260110, seems needed for A17
+
+typedef enum {
+    STAT_NATIVE,	// struct stat
+    STAT_COMPAT,	// struct compat_stat
+    STAT_STAT64		// struct stat64 // 32-bit uses this
+} stat_type_t;
+
+static __always_inline void ksu_common_newfstat_ret(unsigned long fd_long, void **statbuf_ptr, const stat_type_t type)
+{
+	
+	if (!ksu_vfs_read_hook) {
+		return;
+	}
+
+	if (!is_init(get_current_cred()))
+		return;
+
+	struct file *file = fget(fd_long);
+	if (!file)
+		return;
+
+	if (!is_init_rc(file)) {
+		fput(file);
+		return;
+	}
+	fput(file);
+
+	pr_info("%s: stat init.rc \n", __func__);
+
+	uintptr_t statbuf_ptr_local = (uintptr_t)*(void **)statbuf_ptr;
+	void __user *statbuf = (void __user *)statbuf_ptr_local;
+	if (!statbuf)
+		return;
+
+	void __user *st_size_ptr;
+	long size, new_size;
+	size_t len;
+
+	switch (type) {
+#ifdef CONFIG_COMPAT
+		case STAT_COMPAT:
+			st_size_ptr = statbuf + offsetof(struct compat_stat, st_size);
+			len = sizeof(compat_off_t);
+			break;
+#endif
+#if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
+		case STAT_STAT64:
+			st_size_ptr = statbuf + offsetof(struct stat64, st_size);
+			len = sizeof(long long);
+			break;
+#endif
+		case STAT_NATIVE:
+		default:
+			st_size_ptr = statbuf + offsetof(struct stat, st_size);
+			len = sizeof(long);
+			break;
+	}
+
+	if (copy_from_user(&size, st_size_ptr, len)) {
+		pr_info("%s: read statbuf 0x%lx failed \n", __func__, (unsigned long)st_size_ptr);
+		return;
+	}
+
+	new_size = size + ksu_rc_len;
+	pr_info("%s: adding ksu_rc_len: %ld -> %ld \n", __func__, size, new_size);
+		
+	if (!copy_to_user(st_size_ptr, &new_size, len))
+		pr_info("%s: added ksu_rc_len \n", __func__);
+	else
+		pr_info("%s: add ksu_rc_len failed: statbuf 0x%lx \n", __func__, (unsigned long)st_size_ptr);
+	
+	return;
+
+}
+
+void ksu_handle_newfstat_ret(unsigned int *fd, struct stat __user **statbuf_ptr)
+{
+	unsigned long fd_long = (unsigned long)*fd;
+
+	// native
+	ksu_common_newfstat_ret(fd_long, (void **)statbuf_ptr, STAT_NATIVE);
+}
+
+
+#if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
+void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **statbuf_ptr)
+{
+	unsigned long fd_long = (unsigned long)*fd;
+
+	// 32-bit call uses this!
+	ksu_common_newfstat_ret(fd_long, (void **)statbuf_ptr, STAT_STAT64);
+}
+#endif
+
+#ifdef CONFIG_COMPAT // this one is wrong, only keeping it for people that picked it up
+void ksu_compat_newfstat_ret(unsigned int *fd, struct compat_stat __user **statbuf_ptr)
+{
+	unsigned long fd_long = (unsigned long)*fd;
+
+	// compat: is this even worth the trouble?
+	// only 32-on-64 can benefit, its questionable that init is on compat on A17
+	// this is so BULLSHIT that I have to do it !!
+	ksu_common_newfstat_ret(fd_long, (void **)statbuf_ptr, STAT_COMPAT);
+}
+#endif
+
 // working dummies for manual hooks
-// __attribute__((deprecated))
+__attribute__((deprecated))
 int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos)
 {
 	return 0;
 }
 
-// __attribute__((deprecated))
+__attribute__((deprecated))
 int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr, size_t *count_ptr)
 {
 	return 0;
 }
 
-//__attribute__((deprecated))
+__attribute__((deprecated))
 int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value)
 {
 	return 0;
 }
 
-static unsigned int volumedown_pressed_count = 0;
+static bool safe_mode_flag = false;
+#define VOLUME_PRESS_THRESHOLD_COUNT 3
 
 bool ksu_is_safe_mode()
 {
-	static bool safe_mode = false;
-	if (safe_mode) {
-		// don't need to check again, userspace may call multiple times
+	// don't need to check again, userspace may call multiple times
+	static bool already_checked = false;
+	if (already_checked)
 		return true;
-	}
 
 	// stop hook first!
 	stop_input_hook();
 
-	pr_info("volumedown_pressed_count: %d\n", volumedown_pressed_count);
-#define VOLUME_DOWN_THRESHOLD_COUNT 3
-	if (volumedown_pressed_count >= VOLUME_DOWN_THRESHOLD_COUNT) {
-		// pressed over 3 times
-		pr_info("KEY_VOLUMEDOWN pressed max times, safe mode detected!\n");
-		safe_mode = true;
-		return true;
-	}
 
-	return false;
+	if (!safe_mode_flag)
+		return false;
+		
+	pr_info("volume keys pressed max times, safe mode detected!\n");
+	already_checked = true;
+	return true;
 }
 
 static void vol_detector_event(struct input_handle *handle, unsigned int type, unsigned int code, int value)
 {
+	static int vol_up_cnt = 0;
+	static int vol_down_cnt = 0;
+
 	if (!value)
 		return;
 	
 	if (type != EV_KEY)
 		return;
 	
-	//if (code != KEY_VOLUMEDOWN)
-	//	return;
+	if (code == KEY_VOLUMEDOWN) {
+		vol_down_cnt++;
+		pr_info("KEY_VOLUMEDOWN press detected!\n");
+	}
 
-	volumedown_pressed_count++;
-	pr_info("volumedown_pressed_count: %d\n", volumedown_pressed_count);
+	if (code == KEY_VOLUMEUP) {
+		vol_up_cnt++;
+		pr_info("KEY_VOLUMEUP press detected!\n");
+	}
 
-	// yeah this fucks up, seems unreg in the same context is an issue 
-	// but then again, tehres no need to unreg here, just let on_post_fs_data do it
-	//if (volumedown_pressed_count >= 3) {
-	//	pr_info("KEY_VOLUMEDOWN pressed max times, safe mode detected!\n");
-	//	stop_input_hook();
-	//}
+	pr_info("volume_pressed_count: vol_up: %d vol_down: %d\n", vol_up_cnt, vol_down_cnt);
+
+	/*
+	 * on upstream we call stop_input_hook() here but this is causing issues
+	 * #1. unregistering an input handler inside the input handler is a bad meme
+	 * #2. when I tried to defer unreg to a kthread, it also causes issues on some users? nfi.
+	 * since unregging is done anyway on ksu_is_safe_mode() or on_post_fs_data() we just dont bother.
+	 *
+	 */
+	if (vol_up_cnt >= VOLUME_PRESS_THRESHOLD_COUNT || vol_down_cnt >= VOLUME_PRESS_THRESHOLD_COUNT) {
+		pr_info("volume keys pressed max times, safe mode detected!\n");
+		safe_mode_flag = true;
+	}
 }
 
 static int vol_detector_connect(struct input_handler *handler, struct input_dev *dev,
@@ -538,6 +646,14 @@ err_free_handle:
 }
 
 static const struct input_device_id vol_detector_ids[] = { 
+	// we add key volume up so that
+	// 1. if you have broken volume down you get shit
+	// 2. we can make sure to trigger only ksu safemode, not android's safemode.
+	{
+		.flags = INPUT_DEVICE_ID_MATCH_EVBIT | INPUT_DEVICE_ID_MATCH_KEYBIT,
+		.evbit = { BIT_MASK(EV_KEY) },
+		.keybit = { [BIT_WORD(KEY_VOLUMEUP)] = BIT_MASK(KEY_VOLUMEUP) },
+	},
 	{
 		.flags = INPUT_DEVICE_ID_MATCH_EVBIT | INPUT_DEVICE_ID_MATCH_KEYBIT,
 		.evbit = { BIT_MASK(EV_KEY) },
@@ -569,10 +685,11 @@ static int vol_detector_init()
 	return input_register_handler(&vol_detector_handler);
 }
 
-static void vol_detector_exit()
+static int vol_detector_exit()
 {
 	pr_info("vol_detector: exit\n");
 	input_unregister_handler(&vol_detector_handler);
+	return 0;
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0) // is_ksu_transition
@@ -630,9 +747,6 @@ static void stop_execve_hook()
 {
 	ksu_execveat_hook = false;
 	pr_info("stop execve_hook\n");
-#ifdef CONFIG_KSU_KPROBES_KSUD
-	unregister_kprobe_thread();
-#endif
 }
 
 static void stop_input_hook()

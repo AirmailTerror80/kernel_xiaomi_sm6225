@@ -11,7 +11,7 @@
 
 uid_t ksu_manager_appid = KSU_INVALID_APPID;
 
-static struct task_struct *throne_thread;
+static struct task_struct *throne_thread = NULL;
 #define SYSTEM_PACKAGES_LIST_PATH "/data/system/packages.list"
 
 struct uid_data {
@@ -384,7 +384,7 @@ static int throne_tracker_thread(void *data)
 	pr_info("throne_tracker: pid: %d started\n", current->pid);
 
 	// this is normally not needed, but it wont hurt
-	kthread_escape();
+	escape_to_root_forced();
 
 	throne_tracker_fn(prune_only);
 	throne_thread = NULL;

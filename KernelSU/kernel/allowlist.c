@@ -430,16 +430,13 @@ out:
 	return;
 }
 
-extern void kthread_escape(void);
-
 // this is a bit heavier than task work / workqueue but this allows
 // us to have our own context. we give it a full escaped-to-root one.
 static int persistent_allow_list_pre(void *data)
 {
 	pr_info("ksu_persistent_allow_list_fn: pid: %d started\n", current->pid);
 
-	// give permissions for everything
-	kthread_escape();
+	escape_to_root_forced(); // give permissions for everything
 	ksu_persistent_allow_list_fn();	
 	allowlist_thread = NULL;
 	smp_mb();
