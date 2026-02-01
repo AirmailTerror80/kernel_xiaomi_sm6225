@@ -65,8 +65,7 @@ static char __user *ksud_user_path(void)
 	return userspace_stack_buffer(ksud_path, sizeof(ksud_path));
 }
 
-// every little bit helps here
-__attribute__((hot, no_stack_protector))
+__attribute__((hot))
 static __always_inline bool is_su_allowed(const void **ptr_to_check)
 {
 	barrier();
@@ -323,25 +322,42 @@ int ksu_getname_flags_kernel(char **kname, int flags)
 	return ksu_sucompat_kernel_common((void *)*kname, "getname_flags", escalate, sym);
 }
 
+#ifdef CONFIG_KSU_TAMPER_SYSCALL_TABLE
+static void syscall_table_sucompat_enable();
+static void syscall_table_sucompat_disable();
+#endif
+
 #ifdef CONFIG_KSU_KRETPROBES_SUCOMPAT
-extern void rp_sucompat_exit();
-extern void rp_sucompat_init();
+static void rp_sucompat_exit();
+static void rp_sucompat_init();
 #endif
 
 static void ksu_sucompat_enable()
 {
+
+#ifdef CONFIG_KSU_TAMPER_SYSCALL_TABLE
+	syscall_table_sucompat_enable();
+#endif
+
 #ifdef CONFIG_KSU_KRETPROBES_SUCOMPAT
 	rp_sucompat_init();
 #endif
+
 	ksu_su_compat_enabled = true;
 	pr_info("%s: hooks enabled: exec, faccessat, stat\n", __func__);
 }
 
 static void ksu_sucompat_disable()
 {
+
+#ifdef CONFIG_KSU_TAMPER_SYSCALL_TABLE
+	syscall_table_sucompat_disable();
+#endif
+
 #ifdef CONFIG_KSU_KRETPROBES_SUCOMPAT
 	rp_sucompat_exit();
 #endif
+
 	ksu_su_compat_enabled = false;
 	pr_info("%s: hooks disabled: exec, faccessat, stat\n", __func__);
 }

@@ -64,7 +64,11 @@
 #include "selinux/rules.c"
 
 #ifdef CONFIG_KSU_TAMPER_SYSCALL_TABLE
+#ifdef CONFIG_ARM64
 #include "syscall_table_hook.c"
+#elif CONFIG_ARM
+#include "syscall_table_hook_arm.c"
+#endif
 #endif
 
 #ifdef CONFIG_KSU_KPROBES_KSUD
@@ -112,13 +116,8 @@ extern void ksu_supercalls_init();
 #else
 	#define FEAT_5 ""
 #endif
-#if !(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)) && defined(KSU_HAS_PATH_UMOUNT)
-	#define FEAT_6 " +path_umount"
-#else
-	#define FEAT_6 ""
-#endif
 
-#define EXTRA_FEATURES FEAT_1 FEAT_2 FEAT_3 FEAT_4 FEAT_5 FEAT_6
+#define EXTRA_FEATURES FEAT_1 FEAT_2 FEAT_3 FEAT_4 FEAT_5
 
 int __init kernelsu_init(void)
 {

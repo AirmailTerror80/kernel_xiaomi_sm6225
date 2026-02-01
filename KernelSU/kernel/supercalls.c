@@ -481,7 +481,7 @@ static int do_nuke_ext4_sysfs(void __user *arg)
 
 	memset(mnt, 0, sizeof(mnt));
 
-	ret = strncpy_from_user(mnt, cmd.arg, sizeof(mnt));
+	ret = strncpy_from_user(mnt, (void __user *)cmd.arg, sizeof(mnt));
 	if (ret < 0) {
 		pr_err("nuke ext4 copy mnt failed: %ld\\n", ret);
 		return -EFAULT;   // 或者 return ret;
@@ -799,7 +799,7 @@ int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user 
 		static char original_version_buf[65] = {0};
 
 		// basically void * void __user * void __user *arg
-		void ***ppptr = (uintptr_t)arg;
+		void ***ppptr = (void ***)(uintptr_t)arg;
 
 		// user pointer storage
 		// init this as zero so this works on 32-on-64 compat (LE)

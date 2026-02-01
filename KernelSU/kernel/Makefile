@@ -9,8 +9,8 @@ MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 $(info -- KDIR: $(KDIR))
 $(info -- MDIR: $(MDIR))
 
-# compliant to last upstream kernel change as of 9179f43a
-ccflags-y += -DKSU_VERSION=32275
+# compliant to last upstream kernel change as of b2dc44e
+ccflags-y += -DKSU_VERSION=32285
 
 ifeq ($(shell grep -q " current_sid(void)" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
 ccflags-y += -DKSU_COMPAT_HAS_CURRENT_SID
@@ -56,11 +56,6 @@ ifeq ($(shell grep -q "^extern void ext4_unregister_sysfs" $(srctree)/fs/ext4/ex
 ccflags-y += -DKSU_HAS_MODERN_EXT4
 endif
 
-ifeq ($(shell grep -q "int path_umount" $(srctree)/fs/namespace.c; echo $$?),0)
-$(info -- KernelSU/compat: path_umount found)
-ccflags-y += -DKSU_HAS_PATH_UMOUNT
-endif
-
 ifeq ($(shell grep -q "selinux_inode" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
 $(info -- KernelSU/compat: selinux_inode() found)
 ccflags-y += -DKSU_HAS_SELINUX_INODE
@@ -78,5 +73,6 @@ endif
 
 ccflags-y += -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
 ccflags-y += -Wno-declaration-after-statement -Wno-unused-function -Wno-format -Wno-incompatible-pointer-types
+ccflags-y += -Wno-unused-variable -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
 
 # Keep a new line here!! Because someone may append config

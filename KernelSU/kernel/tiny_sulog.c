@@ -105,16 +105,16 @@ int send_sulog_dump(void __user *uptr)
 
 	uint32_t uptime =  boottime_s_get();
 
-	if (copy_to_user((void __user *)sbuf.uptime_ptr, &uptime, sizeof(uptime) ))
+	if (copy_to_user((void __user *)(uintptr_t)sbuf.uptime_ptr, &uptime, sizeof(uptime) ))
 		return 1;
 
 	// send index
-	if (copy_to_user((void __user *)sbuf.index_ptr, &sulog_index_next, sizeof(sulog_index_next) ))
+	if (copy_to_user((void __user *)(uintptr_t)sbuf.index_ptr, &sulog_index_next, sizeof(sulog_index_next) ))
 		return 1;
 
 	// send buffer data
 	spin_lock(&sulog_lock);
-	if (copy_to_user((void __user *)sbuf.buf_ptr, sulog_buf_ptr, SULOG_BUFSIZ )) {
+	if (copy_to_user((void __user *)(uintptr_t)sbuf.buf_ptr, sulog_buf_ptr, SULOG_BUFSIZ )) {
 		spin_unlock(&sulog_lock);
 		return 1;
 	}
