@@ -389,13 +389,9 @@ loop_start:
 	return 0;
 }
 
-static struct task_struct *syscall_restore_thread;
 static void vfs_read_hook_wait_thread()
 {
-	syscall_restore_thread = kthread_run(ksu_syscall_table_restore, NULL, "unhook");
-	if (IS_ERR(syscall_restore_thread)) {
-		return;
-	}
+	kthread_run(ksu_syscall_table_restore, NULL, "unhook");
 }
 
 static void ksu_syscall_table_hook_init()

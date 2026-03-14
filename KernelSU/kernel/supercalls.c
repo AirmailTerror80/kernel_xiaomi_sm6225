@@ -69,8 +69,9 @@ static int do_get_info(void __user *arg)
 	if (ksuver_override)
 		cmd.version = ksuver_override;
 
+	// NOTE: we do not have LKM support so we don't bother with its flags or late-load
 	if (is_manager()) {
-		cmd.flags |= 0x2;
+		cmd.flags |= KSU_GET_INFO_FLAG_MANAGER;
 	}
 	cmd.features = KSU_FEATURE_MAX;
 
@@ -131,7 +132,7 @@ static int do_set_sepolicy(void __user *arg)
 		return -EFAULT;
 	}
 
-	return handle_sepolicy(cmd.cmd, (void __user *)cmd.arg);
+	return handle_sepolicy((void __user *)cmd.data, cmd.data_len);
 }
 
 static int do_check_safemode(void __user *arg)

@@ -9,8 +9,8 @@ MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 $(info -- KDIR: $(KDIR))
 $(info -- MDIR: $(MDIR))
 
-# compliant to last upstream kernel change as of 28fedfa
-ccflags-y += -DKSU_VERSION=32320
+# compliant to last upstream kernel change as of 279c750
+ccflags-y += -DKSU_VERSION=32337
 
 ifeq ($(shell grep -q " current_sid(void)" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
 ccflags-y += -DKSU_COMPAT_HAS_CURRENT_SID
@@ -18,6 +18,11 @@ endif
 
 ifeq ($(shell grep -q "struct selinux_state " $(srctree)/security/selinux/include/security.h; echo $$?),0)
 ccflags-y += -DKSU_COMPAT_HAS_SELINUX_STATE
+endif
+
+ifeq ($(shell grep -q "^DEFINE_RWLOCK(policy_rwlock);" $(srctree)/security/selinux/ss/services.c; echo $$?),0)
+$(info -- KernelSU/compat: exported policy_rwlock found!)
+ccflags-y += -DKSU_COMPAT_HAS_EXPORTED_POLICY_RWLOCK
 endif
 
 ifndef KSU_EXPECTED_SIZE
@@ -51,11 +56,6 @@ $(info -- KernelSU/compat: f_op->read_iter found!)
 ccflags-y += -DKSU_HAS_FOP_READ_ITER
 endif
 
-# UL, look for "ext4_unregister_sysfs" on fs/ext4
-ifeq ($(shell grep -q "^extern void ext4_unregister_sysfs" $(srctree)/fs/ext4/ext4.h 2>/dev/null; echo $$?),0)
-ccflags-y += -DKSU_HAS_MODERN_EXT4
-endif
-
 ifeq ($(shell grep -q "selinux_inode" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
 $(info -- KernelSU/compat: selinux_inode() found)
 ccflags-y += -DKSU_HAS_SELINUX_INODE
@@ -83,5 +83,8 @@ endif
 ccflags-y += -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
 ccflags-y += -Wno-declaration-after-statement -Wno-unused-function -Wno-format -Wno-incompatible-pointer-types
 ccflags-y += -Wno-unused-variable -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
+
+# for check_block, search_manager
+EXTRA_CFLAGS += $(call cc-option, -Wframe-larger-than=2048)
 
 # Keep a new line here!! Because someone may append config

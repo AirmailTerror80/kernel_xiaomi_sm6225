@@ -84,7 +84,6 @@ void on_post_fs_data(void)
 	stop_input_hook();
 }
 
-#if defined(CONFIG_EXT4_FS) && ( LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0) || defined(KSU_HAS_MODERN_EXT4) )
 extern void ext4_unregister_sysfs(struct super_block *sb);
 int nuke_ext4_sysfs(const char *mnt)
 {
@@ -107,12 +106,6 @@ int nuke_ext4_sysfs(const char *mnt)
 	path_put(&path);
 	return 0;
 }
-#else
-int nuke_ext4_sysfs(const char* mnt) {
-	pr_info("%s: feature not implemented!\n", __func__);
-	return 0;
-}
-#endif
 
 void on_module_mounted(void)
 {
@@ -510,12 +503,6 @@ void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **statbuf_pt
 }
 #endif
 
-__attribute__((deprecated))
-int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value)
-{
-	return 0;
-}
-
 static bool safe_mode_flag = false;
 #define VOLUME_PRESS_THRESHOLD_COUNT 3
 
@@ -651,51 +638,6 @@ static int vol_detector_exit()
 	input_unregister_handler(&vol_detector_handler);
 	return 0;
 }
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0) // is_ksu_transition
-u32 ksud_init_sid = 0;
-u32 ksud_su_sid = 0;
-
-int grab_transition_sids()
-{
-	int error = security_secctx_to_secid("u:r:init:s0", strlen("u:r:init:s0"), &ksud_init_sid);
-	if (error)
-		return 1;
-
-	pr_info("is_ksu_transition: got init sid: %d\n", ksud_init_sid);
-
-	error = security_secctx_to_secid(KERNEL_SU_CONTEXT, strlen(KERNEL_SU_CONTEXT), &ksud_su_sid);
-	if (error)
-		return 1;
-
-	pr_info("is_ksu_transition: got su sid: %d\n", ksud_su_sid);
-	
-	return 0;
-}
-
-bool is_ksu_transition(const struct task_security_struct *old_tsec,
-			const struct task_security_struct *new_tsec)
-{
-
-	// we don't need this hook anymore after the third ksud run, which is boot-complete.
-	if (likely(ksu_boot_completed))
-		return false;
-
-	if (!ksud_su_sid || !ksud_init_sid) {
-		int ret = grab_transition_sids();
-		if (ret)
-			return false;
-	}
-
-	// if its init transitioning to su, allow it
-	if (old_tsec->sid == ksud_init_sid && new_tsec->sid == ksud_su_sid) {
-		pr_info("%s: allowing init (%d) -> su (%d)\n", __func__, ksud_init_sid, ksud_su_sid);
-		return true;
-	}
-
-	return false;
-}
-#endif // is_ksu_transition
 
 static void stop_vfs_read_hook()
 {

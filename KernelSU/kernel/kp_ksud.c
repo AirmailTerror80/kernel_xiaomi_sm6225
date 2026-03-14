@@ -7,8 +7,6 @@
 #include <linux/kthread.h>
 #include <linux/sched.h>
 
-static struct task_struct *unregister_thread;
-
 // sys_newfstat rp
 // upstream: https://github.com/tiann/KernelSU/commit/df640917d11dd0eff1b34ea53ec3c0dc49667002
 
@@ -187,18 +185,12 @@ loop_start:
 	pr_info("kp_ksud: unregister sys_fstat64_rp!\n");
 #endif
 
-	unregister_thread = NULL;
-
 	return 0;
 }
 
 static void unregister_kprobe_thread()
 {
-	unregister_thread = kthread_run(unregister_kprobe_function, NULL, "kprobe_unregister");
-	if (IS_ERR(unregister_thread)) {
-		unregister_thread = NULL;
-		return;
-	}
+	kthread_run(unregister_kprobe_function, NULL, "kp_unreg");
 }
 
 static void kp_ksud_init()

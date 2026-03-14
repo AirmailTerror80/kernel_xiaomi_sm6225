@@ -92,7 +92,7 @@ extern void ksu_supercalls_init();
 // ref: kernel_compat.c, Makefile
 // yes looks nasty
 #if defined(CONFIG_KSU_KPROBES_KSUD)
-	#define FEAT_1 " +kprobes_ksud"
+	#define FEAT_1 " +kp_ksud"
 #else
 	#define FEAT_1 ""
 #endif
@@ -108,7 +108,7 @@ extern void ksu_supercalls_init();
 	#define FEAT_3 ""
 #endif
 #if defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
-	#define FEAT_4 " +sys_call_table_hook"
+	#define FEAT_4 " +syscall_table_hook"
 #else
 	#define FEAT_4 ""
 #endif

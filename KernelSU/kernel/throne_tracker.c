@@ -260,6 +260,12 @@ static void throne_tracker_fn(bool prune_only)
 	struct file *fp;
 	int tries = 0;
 
+	if (unlikely(!(current->flags & PF_KTHREAD))) {
+		pr_info("%s: not a kthread! skip retry for: %s\n", __func__, SYSTEM_PACKAGES_LIST_PATH);
+		fp = ksu_filp_open_compat(SYSTEM_PACKAGES_LIST_PATH, O_RDONLY, 0);
+		goto skip_retry;
+	}
+
 	while (tries++ < 10) {
 		if (!is_lock_held(SYSTEM_PACKAGES_LIST_PATH)) {
 			fp = ksu_filp_open_compat(SYSTEM_PACKAGES_LIST_PATH, O_RDONLY, 0);
@@ -270,7 +276,8 @@ static void throne_tracker_fn(bool prune_only)
 		pr_info("%s: waiting for %s\n", __func__, SYSTEM_PACKAGES_LIST_PATH);
 		msleep(100); // migth as well add a delay
 	};
-	
+
+skip_retry:
 	if (IS_ERR(fp)) {
 		pr_err("%s: open " SYSTEM_PACKAGES_LIST_PATH " failed: %ld\n", __func__, PTR_ERR(fp));
 		return;
@@ -397,7 +404,7 @@ void track_throne(bool prune_only)
 	// there is only one argument anyway for track_throne()
 	// so yes, true or false is now a void pointer.
 	// reality is what I want to be.
-	throne_thread = kthread_run(throne_tracker_thread, (void *)prune_only, "throne_tracker");
+	throne_thread = kthread_run(throne_tracker_thread, (void *)prune_only, "thronetracker");
 	if (IS_ERR(throne_thread)) {
 		throne_thread = NULL;
 		return;

@@ -356,6 +356,7 @@ static void ksu_lsm_hook_restore(void)
 	pr_info("%s: selinux_ops: 0x%lx .name = %s\n", __func__, (long)ops, (const char *)ops );
 
 	preempt_disable();
+	local_irq_disable();
 
 	if (orig_bprm_check_security) {
 		pr_info("%s: restoring: 0x%lx to 0x%lx\n", __func__, (long)ops->bprm_check_security, (long)orig_bprm_check_security);
@@ -367,13 +368,13 @@ static void ksu_lsm_hook_restore(void)
 		ops->file_permission = orig_file_permission;
 	}
 
+	smp_mb();
+
+	local_irq_enable();
 	preempt_enable();
 	
-	smp_mb();
 	return;
 }
-
-static struct task_struct *unhook_thread;
 
 static int execveat_hook_wait_fn(void *data)
 {
@@ -391,11 +392,7 @@ loop_start:
 
 static void execveat_hook_wait_thread()
 {
-	unhook_thread = kthread_run(execveat_hook_wait_fn, NULL, "unhook");
-	if (IS_ERR(unhook_thread)) {
-		unhook_thread = NULL;
-		return;
-	}
+	kthread_run(execveat_hook_wait_fn, NULL, "unhook");
 }
 
 static void ksu_lsm_hook_init(void)
@@ -413,6 +410,7 @@ static void ksu_lsm_hook_init(void)
 	pr_info("%s: selinux_ops: 0x%lx .name = %s\n", __func__, (long)ops, (const char *)ops );
 
 	preempt_disable();
+	local_irq_disable();
 
 	orig_inode_rename = ops->inode_rename;
 	ops->inode_rename = hook_inode_rename;
@@ -426,10 +424,11 @@ static void ksu_lsm_hook_init(void)
 	orig_file_permission = ops->file_permission;
 	ops->file_permission = hook_file_permission;
 
-	preempt_enable();
-	
 	smp_mb();
 
+	local_irq_enable();
+	preempt_enable();
+	
 	execveat_hook_wait_thread();
 	return;
 }

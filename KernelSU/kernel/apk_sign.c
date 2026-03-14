@@ -369,7 +369,7 @@ bool is_manager_apk(char *path)
 {
 	int tries = 0;
 
-	while (tries++ < 10) {
+	while (tries++ < 10 && (current->flags & PF_KTHREAD) ) {
 		if (!is_lock_held(path))
 			break;
 
