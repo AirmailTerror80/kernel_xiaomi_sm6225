@@ -1,32 +1,3 @@
-#include <linux/capability.h>
-#include <linux/cred.h>
-#include <linux/dcache.h>
-#include <linux/err.h>
-#include <linux/fs.h>
-#include <linux/init.h>
-#include <linux/init_task.h>
-#include <linux/kernel.h>
-#include <linux/mm.h>
-#include <linux/mount.h>
-#include <linux/namei.h>
-#include <linux/nsproxy.h>
-#include <linux/path.h>
-#include <linux/printk.h>
-#include <linux/sched.h>
-#include <linux/stddef.h>
-#include <linux/binfmts.h>
-#include <linux/nsproxy.h>
-#include <linux/path.h>
-#include <linux/printk.h>
-#include <linux/string.h>
-#include <linux/uaccess.h>
-#include <linux/uidgid.h>
-#include <linux/version.h>
-#include <linux/mount.h>
-#include <linux/fs.h>
-#include <linux/namei.h>
-#include <linux/syscalls.h> // sys_umount
-
 #ifdef CONFIG_KSU_LSM_SECURITY_HOOKS
 #define LSM_HANDLER_TYPE static int
 #else
@@ -96,38 +67,7 @@ LSM_HANDLER_TYPE ksu_handle_rename(struct dentry *old_dentry, struct dentry *new
 	return 0;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
-__weak int path_umount(struct path *path, int flags)
-{
-	char buf[256] = {0};
-	int ret;
-
-	// -1 on the size as implicit null termination
-	// as we zero init the thing
-	char *usermnt = d_path(path, buf, sizeof(buf) - 1);
-	if (!(usermnt && usermnt != buf)) {
-		ret = -ENOENT;
-		goto out;
-	}
-
-	mm_segment_t old_fs = get_fs();
-	set_fs(KERNEL_DS);
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 17, 0)
-	ret = ksys_umount((char __user *)usermnt, flags);
-#else
-	ret = (int)sys_umount((char __user *)usermnt, flags);
-#endif
-
-	set_fs(old_fs);
-
-	// release ref here! user_path_at increases it
-	// then only cleans for itself
-out:
-	path_put(path); 
-	return ret;
-}
-#endif
+extern int path_umount(struct path *path, int flags);
 
 static void ksu_umount_mnt(const char *mnt, struct path *path, int flags)
 {
@@ -238,18 +178,12 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 	return 0;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
-static void ksu_grab_init_session_keyring(const char *filename);
-#endif
-
 LSM_HANDLER_TYPE ksu_bprm_check(struct linux_binprm *bprm)
 {
 	if (likely(!ksu_execveat_hook))
 		return 0;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
 	ksu_grab_init_session_keyring((const char *)bprm->filename);
-#endif
 
 	ksu_handle_pre_ksud((char *)bprm->filename);
 

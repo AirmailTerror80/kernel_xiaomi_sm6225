@@ -1,11 +1,4 @@
-#include <linux/version.h>
 #include <linux/kprobes.h>
-#include <linux/printk.h>
-#include <linux/types.h>
-#include <linux/uaccess.h>
-#include <linux/binfmts.h>
-#include <linux/kthread.h>
-#include <linux/sched.h>
 
 // sys_newfstat rp
 // upstream: https://github.com/tiann/KernelSU/commit/df640917d11dd0eff1b34ea53ec3c0dc49667002

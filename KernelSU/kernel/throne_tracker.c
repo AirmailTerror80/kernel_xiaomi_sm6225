@@ -1,17 +1,5 @@
-#include <linux/err.h>
-#include <linux/fs.h>
-#include <linux/list.h>
-#include <linux/slab.h>
-#include <linux/string.h>
-#include <linux/types.h>
-#include <linux/version.h>
-
-#include <linux/kthread.h>
-#include <linux/sched.h>
-
 uid_t ksu_manager_appid = KSU_INVALID_APPID;
 
-static struct task_struct *throne_thread = NULL;
 #define SYSTEM_PACKAGES_LIST_PATH "/data/system/packages.list"
 
 struct uid_data {
@@ -257,7 +245,7 @@ static bool is_uid_exist(uid_t uid, char *package, void *data)
 
 static void throne_tracker_fn(bool prune_only)
 {
-	struct file *fp;
+	struct file *fp = NULL;
 	int tries = 0;
 
 	if (unlikely(!(current->flags & PF_KTHREAD))) {
@@ -368,6 +356,8 @@ out:
 	}
 }
 
+static DEFINE_MUTEX(throne_tracker_mutex);
+
 static int throne_tracker_thread(void *data)
 {
 	// now de-void it here
@@ -375,12 +365,13 @@ static int throne_tracker_thread(void *data)
 
 	pr_info("throne_tracker: pid: %d started\n", current->pid);
 
-	// this is normally not needed, but it wont hurt
-	escape_to_root_forced();
+	mutex_lock(&throne_tracker_mutex);
 
+	escape_to_root_forced();
 	throne_tracker_fn(prune_only);
-	throne_thread = NULL;
-	smp_mb();
+
+	mutex_unlock(&throne_tracker_mutex);
+
 	pr_info("throne_tracker: pid: %d exit!\n", current->pid);
 	return 0;
 }
@@ -390,25 +381,20 @@ void track_throne(bool prune_only)
 #ifndef CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED
 	static bool throne_tracker_first_run __read_mostly = true;
 	if (unlikely(throne_tracker_first_run)) {
+		mutex_lock(&throne_tracker_mutex);
 		throne_tracker_fn(prune_only);
+		mutex_unlock(&throne_tracker_mutex);
 		throne_tracker_first_run = false;
 		return;
 	}
 #endif
-	smp_mb();
-	if (throne_thread != NULL) // single instance lock
-		return;
 
 	// HACK: force cast prune_only to be a void *
 	// this way we won't need to create a struct.
 	// there is only one argument anyway for track_throne()
 	// so yes, true or false is now a void pointer.
 	// reality is what I want to be.
-	throne_thread = kthread_run(throne_tracker_thread, (void *)prune_only, "thronetracker");
-	if (IS_ERR(throne_thread)) {
-		throne_thread = NULL;
-		return;
-	}
+	kthread_run(throne_tracker_thread, (void *)prune_only, "thronetracker");
 }
 
 void ksu_throne_tracker_init()

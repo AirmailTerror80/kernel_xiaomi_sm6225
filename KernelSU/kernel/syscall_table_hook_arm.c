@@ -1,6 +1,3 @@
-#include <asm/syscall.h>
-#include <linux/vmalloc.h>
-
 #ifndef CONFIG_ARM
 #error "only meant for ARM"
 #endif

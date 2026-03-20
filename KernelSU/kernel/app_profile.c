@@ -1,20 +1,3 @@
-#include <linux/version.h>
-#include <linux/capability.h>
-#include <linux/cred.h>
-#include <linux/sched.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0)
-#include <linux/sched/signal.h> // signal_struct
-#include <linux/sched/task.h>
-#include <linux/sched/user.h>
-#else
-#include <linux/sched.h>
-#endif
-#include <linux/seccomp.h>
-#include <linux/slab.h>
-#include <linux/thread_info.h>
-#include <linux/uidgid.h>
-#include <linux/version.h>
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION (6, 7, 0)
 static struct group_info root_groups = { .usage = REFCOUNT_INIT(2) };
 #else 
@@ -74,7 +57,7 @@ void disable_seccomp()
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
 	struct task_struct *fake;
 
-	fake = kmalloc(sizeof(*fake), GFP_ATOMIC);
+	fake = kmalloc(sizeof(*fake), GFP_KERNEL);
 	if (!fake) {
 		pr_warn("failed to alloc fake task_struct\n");
 		return;
@@ -116,8 +99,9 @@ void disable_seccomp()
 #endif // 5.9
 }
 
-static void escape_to_root(bool is_forced)
+static int escape_to_root(bool is_forced)
 {
+	int ret = 0;
 	struct cred *cred;
 	struct root_profile profile;
 	struct user_struct *new_user;
@@ -125,7 +109,7 @@ static void escape_to_root(bool is_forced)
 	cred = prepare_creds();
 	if (!cred) {
 		pr_warn("prepare_creds failed!\n");
-		return;
+		return -ENOMEM;
 	}
 
 	if (!is_forced && ksu_get_uid_t(cred->euid) == 0) {
@@ -159,8 +143,13 @@ static void escape_to_root(bool is_forced)
 	 * https://github.com/torvalds/linux/blob/v5.14/kernel/sys.c
 	 * https://github.com/torvalds/linux/blob/v5.14/kernel/cred.c
 	 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0)
 	new_user = alloc_uid(cred->uid);
+#else
+	new_user = alloc_uid(current_user_ns(), cred->uid);
+#endif
 	if (!new_user) {
+		ret = -ENOMEM;
 		goto out_abort_creds;
 	}
 
@@ -193,26 +182,16 @@ static void escape_to_root(bool is_forced)
 		disable_seccomp();
 	
 	setup_mount_ns(profile.namespaces);
-	return;
+	return 0;
 
 out_abort_creds:
 	abort_creds(cred);
+	return ret;
 }
 
-void escape_to_root_for_init(void) {
-	struct cred *cred = prepare_creds();
-	if (!cred) {
-        	pr_err("Failed to prepare init's creds!\n");
-        	return;
-	}
-
-	setup_selinux(KERNEL_SU_CONTEXT, cred);
-	commit_creds(cred);
-}
-
-void escape_with_root_profile(void)
+int escape_with_root_profile(void)
 {
-	escape_to_root(false);
+	return escape_to_root(false);
 }
 
 void escape_to_root_forced(void)

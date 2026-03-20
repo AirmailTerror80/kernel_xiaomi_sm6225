@@ -1,17 +1,4 @@
-#include <linux/export.h>
-#include <linux/fs.h>
-#include <linux/kobject.h>
-#include <linux/init.h>
-#include <linux/module.h>
-#include <generated/utsrelease.h>
-#include <generated/compile.h>
-#include <linux/version.h> /* LINUX_VERSION_CODE, KERNEL_VERSION macros */
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0)
-#include <uapi/asm-generic/errno.h>
-#else
-#include <asm-generic/errno.h>
-#endif
+#include "kernel_includes.h"
 
 #define ksu_get_uid_t(x) *(unsigned int *)&(x)
 
@@ -35,7 +22,6 @@
 #include "selinux/sepolicy.h"
 
 // selinux includes
-#include <linux/lsm_audit.h>
 #include "avc_ss.h"
 #include "objsec.h"
 #include "ss/services.h"

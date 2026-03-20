@@ -1,22 +1,3 @@
-#include <linux/anon_inodes.h>
-#include <linux/capability.h>
-#include <linux/cred.h>
-#include <linux/err.h>
-#include <linux/fdtable.h>
-#include <linux/file.h>
-#include <linux/fs.h>
-#include <linux/slab.h>
-#include <linux/syscalls.h>
-#include <linux/uaccess.h>
-#include <linux/version.h>
-#include <linux/utsname.h> // utsname() and uts_sem
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0)
-#include <linux/sched/task.h> // put_task_struct
-#else
-#include <linux/sched.h>
-#endif
-
 // Permission check functions
 bool only_manager(void)
 {
@@ -679,7 +660,6 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0)
 #include <linux/task_work.h>
-#include <linux/fdtable.h>
 
 struct ksu_install_fd_tw {
 	struct callback_head cb;

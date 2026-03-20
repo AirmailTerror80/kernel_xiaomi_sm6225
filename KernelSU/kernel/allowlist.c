@@ -1,22 +1,3 @@
-#include <linux/rcupdate.h>
-#include <linux/limits.h>
-#include <linux/rculist.h>
-#include <linux/mutex.h>
-#include <linux/capability.h>
-#include <linux/compiler.h>
-#include <linux/fs.h>
-#include <linux/gfp.h>
-#include <linux/kernel.h>
-#include <linux/list.h>
-#include <linux/printk.h>
-#include <linux/slab.h>
-#include <linux/types.h>
-#include <linux/version.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
-#include <linux/compiler_types.h>
-#endif
-#include <linux/kthread.h>
-
 #define FILE_MAGIC 0x7f4b5355 // ' KSU', u32
 #define FILE_FORMAT_VERSION 3 // u32
 
@@ -92,20 +73,6 @@ void ksu_show_allow_list(void)
 	}
 	rcu_read_unlock();
 }
-
-#ifdef CONFIG_KSU_DEBUG
-static void ksu_grant_root_to_shell()
-{	struct app_profile profile = {
-		.version = KSU_APP_PROFILE_VER,
-		.allow_su = true,
-		.current_uid = 2000,
-	};
-	strcpy(profile.key, "com.android.shell");
-	strcpy(profile.rp_config.profile.selinux_domain,
-		   KSU_DEFAULT_SELINUX_DOMAIN);
-	ksu_set_app_profile(&profile);
-}
-#endif
 
 bool ksu_get_app_profile(struct app_profile *profile)
 {
@@ -275,6 +242,11 @@ bool __ksu_is_allow_uid(uid_t uid)
 		return true;
 	}
 
+#ifdef CONFIG_KSU_DEBUG
+	if (unlikely(uid == SHELL_UID))
+		return true;
+#endif
+
 	if (likely(uid <= BITMAP_UID_MAX)) {
 		return !!(allow_list_bitmap[uid / BITS_PER_BYTE] &
 				  (1 << (uid % BITS_PER_BYTE)));
@@ -331,6 +303,11 @@ void ksu_get_root_profile(uid_t uid, struct root_profile *profile)
 		goto use_default;
 	}
 
+#ifdef CONFIG_KSU_DEBUG
+	if (unlikely(uid == SHELL_UID))
+		goto use_default;
+#endif
+
 	rcu_read_lock();
 	list_for_each_entry_rcu (p, &allow_list, list) {
 		if (uid == p->profile.current_uid && p->profile.allow_su) {
@@ -376,7 +353,7 @@ bool ksu_get_allow_list(int *array, u16 length, u16 *out_length, u16 *out_total,
 }
 
 
-void ksu_persistent_allow_list_fn()
+static void ksu_persistent_allow_list_fn()
 {
 	u32 magic = FILE_MAGIC;
 	u32 version = FILE_FORMAT_VERSION;
@@ -450,11 +427,6 @@ void ksu_load_allow_list()
 	struct file *fp = NULL;
 	u32 magic;
 	u32 version;
-
-#ifdef CONFIG_KSU_DEBUG
-	// always allow adb shell by default
-	ksu_grant_root_to_shell();
-#endif
 
 	// load allowlist now!
 	fp = ksu_filp_open_compat(KERNEL_SU_ALLOWLIST, O_RDONLY, 0);

@@ -1,11 +1,4 @@
-#include <linux/version.h>
 #include <linux/kprobes.h>
-#include <linux/printk.h>
-#include <linux/types.h>
-#include <linux/uaccess.h>
-#include <linux/sched.h>
-#include <linux/slab.h>
-#include <linux/namei.h>
 
 static DEFINE_MUTEX(ksu_rp_sucompat_lock);
 

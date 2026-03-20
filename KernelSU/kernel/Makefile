@@ -9,21 +9,8 @@ MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 $(info -- KDIR: $(KDIR))
 $(info -- MDIR: $(MDIR))
 
-# compliant to last upstream kernel change as of 279c750
-ccflags-y += -DKSU_VERSION=32337
-
-ifeq ($(shell grep -q " current_sid(void)" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
-ccflags-y += -DKSU_COMPAT_HAS_CURRENT_SID
-endif
-
-ifeq ($(shell grep -q "struct selinux_state " $(srctree)/security/selinux/include/security.h; echo $$?),0)
-ccflags-y += -DKSU_COMPAT_HAS_SELINUX_STATE
-endif
-
-ifeq ($(shell grep -q "^DEFINE_RWLOCK(policy_rwlock);" $(srctree)/security/selinux/ss/services.c; echo $$?),0)
-$(info -- KernelSU/compat: exported policy_rwlock found!)
-ccflags-y += -DKSU_COMPAT_HAS_EXPORTED_POLICY_RWLOCK
-endif
+# compliant to last upstream kernel change as of 5dddcbe
+ccflags-y += -DKSU_VERSION=32365
 
 ifndef KSU_EXPECTED_SIZE
 KSU_EXPECTED_SIZE := 0x033b
@@ -44,16 +31,24 @@ $(info -- KernelSU Manager signature hash: $(KSU_EXPECTED_HASH))
 ccflags-y += -DEXPECTED_SIZE=$(KSU_EXPECTED_SIZE)
 ccflags-y += -DEXPECTED_HASH=\"$(KSU_EXPECTED_HASH)\"
 
-# UL, look for iterate_dir on ‎fs/readdir.c
-ifeq ($(shell grep -q "^int iterate_dir" $(srctree)/fs/readdir.c 2>/dev/null; echo $$?),0)
-$(info -- KernelSU/compat: iterate_dir found!)
-ccflags-y += -DKSU_HAS_ITERATE_DIR
+ifeq ($(shell grep -q " current_sid(void)" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
+ccflags-y += -DKSU_COMPAT_HAS_CURRENT_SID
+endif
+
+ifeq ($(shell grep -q "struct selinux_state " $(srctree)/security/selinux/include/security.h; echo $$?),0)
+ccflags-y += -DKSU_COMPAT_HAS_SELINUX_STATE
 endif
 
 # UL, look for read_iter on f_op struct
 ifeq ($(shell grep -q "read_iter" $(srctree)/include/linux/fs.h 2>/dev/null; echo $$?),0)
 $(info -- KernelSU/compat: f_op->read_iter found!)
 ccflags-y += -DKSU_HAS_FOP_READ_ITER
+endif
+
+# UL, look for iterate_dir on ‎fs/readdir.c
+ifeq ($(shell grep -q "^int iterate_dir" $(srctree)/fs/readdir.c 2>/dev/null; echo $$?),0)
+$(info -- KernelSU/compat: iterate_dir found!)
+ccflags-y += -DKSU_HAS_ITERATE_DIR
 endif
 
 ifeq ($(shell grep -q "selinux_inode" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
@@ -66,11 +61,6 @@ $(info -- KernelSU/compat: selinux_cred() found)
 ccflags-y += -DKSU_HAS_SELINUX_CRED
 endif
 
-ifeq ($(shell grep -q "static inline struct inode \*file_inode" $(srctree)/include/linux/fs.h; echo $$?),0)
-$(info -- KernelSU/compat: file_inode() found)
-ccflags-y += -DKSU_UL_HAS_FILE_INODE
-endif
-
 ifeq ($(shell grep -q "struct type_datum \*\*type_val_to_struct;" $(srctree)/security/selinux/ss/policydb.h; echo $$?),0)
 ccflags-y += -DKSU_TYPE_VAL_TO_STRUCT
 endif
@@ -80,7 +70,7 @@ ifeq ($(shell grep -q "struct type_datum \*\*type_val_to_struct_array;" $(srctre
 ccflags-y += -DKSU_TYPE_VAL_TO_STRUCT_ARRAY
 endif
 
-ccflags-y += -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
+ccflags-y += -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-int-conversion -Wno-missing-prototypes
 ccflags-y += -Wno-declaration-after-statement -Wno-unused-function -Wno-format -Wno-incompatible-pointer-types
 ccflags-y += -Wno-unused-variable -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
 

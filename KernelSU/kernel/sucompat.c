@@ -1,19 +1,3 @@
-#include <linux/dcache.h>
-#include <linux/security.h>
-#include <asm/current.h>
-#include <linux/cred.h>
-#include <linux/err.h>
-#include <linux/fs.h>
-#include <linux/types.h>
-#include <linux/uaccess.h>
-#include <linux/version.h>
-#include <linux/ptrace.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
-#include <linux/sched/task_stack.h>
-#else
-#include <linux/sched.h>
-#endif
-
 #define SU_PATH "/system/bin/su"
 #define SH_PATH "/system/bin/sh"
 

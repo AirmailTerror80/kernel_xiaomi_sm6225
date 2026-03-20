@@ -1,34 +1,3 @@
-#include <asm/current.h>
-#include <linux/compat.h>
-#include <linux/cred.h>
-#include <linux/dcache.h>
-#include <linux/err.h>
-#include <linux/file.h>
-#include <linux/fs.h>
-#include <linux/version.h>
-#include <linux/kthread.h>
-#include <linux/input.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
-#include <linux/input-event-codes.h>
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0)
-#include <uapi/linux/input.h>
-#else
-#include <linux/input.h>
-#endif
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 1, 0)
-#include <linux/aio.h>
-#endif
-#include <linux/printk.h>
-#include <linux/types.h>
-#include <linux/uaccess.h>
-#include <linux/namei.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
-#include <linux/sched/signal.h> /* fatal_signal_pending */
-#else
-#include <linux/sched.h> /* fatal_signal_pending */
-#endif
-#include <linux/uio.h>
-
 bool ksu_module_mounted __read_mostly = false;
 bool ksu_boot_completed __read_mostly = false;
 
@@ -121,6 +90,8 @@ void on_boot_completed(void)
 	ksu_avc_spoof_late_init(); // slow_avc_init kp
 }
 
+static bool init_second_stage_executed = false;
+
 // since _ksud handler only uses argv and envp for comparisons
 // this can probably work
 // adapted from ksu_handle_execveat_ksud
@@ -133,7 +104,6 @@ static int ksu_handle_bprm_ksud(const char *filename, const char *argv1, const c
 	static const char system_bin_init[] = "/system/bin/init";
 	/* This applies to versions between Android 6 ~ 9  */
 	static const char old_system_init[] = "/init";
-	static bool init_second_stage_executed = false;
 
 	// return early when disabled
 	if (!ksu_execveat_hook)
@@ -388,6 +358,15 @@ static void ksu_handle_initrc(struct file *file)
 		return;
 	}
 
+	// insurance for failed second stage apply
+	if (!init_second_stage_executed) {
+		pr_info("%s: forcing second stage requirements\n", __func__);
+		apply_kernelsu_rules();
+		cache_sid();
+		setup_ksu_cred();
+		init_second_stage_executed = true;	
+	}
+
 	// we only process the first read
 	static bool rc_hooked = false;
 	if (rc_hooked) {
@@ -515,7 +494,6 @@ bool ksu_is_safe_mode()
 
 	// stop hook first!
 	stop_input_hook();
-
 
 	if (!safe_mode_flag)
 		return false;
