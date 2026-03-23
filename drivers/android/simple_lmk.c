@@ -491,16 +491,12 @@ static int simple_lmk_init_set(const char *val, const struct kernel_param *kp)
 	}
 
 	si_meminfo(&i);
-	if (i.totalram << (PAGE_SHIFT-10) > 6144ull * 1024) {
-	  // 8GB variant
-	  slmk_minfree = 100;
-	  slmk_timeout = 200;
-	} else if (i.totalram << (PAGE_SHIFT-10) > 4096ull * 1024) {
-	  // 6GB variant
-	  slmk_minfree = 144;
+	if (i.totalram << (PAGE_SHIFT-10) > 3072ull * 1024) {
+	  // 4GB+ variant
+	  slmk_minfree = 128;
 	  slmk_timeout = 200;
 	} else {
-	  // 4GB or lower
+	  // 3GB or lower
 	  slmk_minfree = 256;
 	  slmk_timeout = 200;
 	}
