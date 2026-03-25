@@ -12,8 +12,7 @@ extern int avc_ss_reset(struct selinux_avc *avc, u32 seqno);
 // reset avc cache table, otherwise the new rules will not take effect if already denied
 static void reset_avc_cache()
 {
-#if ((!defined(KSU_COMPAT_USE_SELINUX_STATE)) || \
-        LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0))
+#if ((!defined(KSU_COMPAT_USE_SELINUX_STATE)) || LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0))
 	avc_ss_reset(0);
 	selnl_notify_policyload(0);
 	selinux_status_update_policyload(0);
@@ -26,28 +25,26 @@ static void reset_avc_cache()
 	selinux_xfrm_notify_policyload();
 }
 
-static struct policydb *get_policydb(void)
-{
-	struct policydb *db;
-// selinux_state does not exists before 4.19
-#ifdef KSU_COMPAT_USE_SELINUX_STATE
-#ifdef SELINUX_POLICY_INSTEAD_SELINUX_SS
-	struct selinux_policy *policy = selinux_state.policy;
-	db = &policy->policydb;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
+
+#if defined(KSU_COMPAT_USE_SELINUX_STATE)
+static struct policydb *get_policydb(void) { return &selinux_state.ss->policydb; }
 #else
-	struct selinux_ss *ss = selinux_state.ss;
-	db = &ss->policydb;
+static struct policydb *get_policydb(void) { return &policydb; }
 #endif
+
+// rwlock
+#if defined(KSU_COMPAT_USE_SELINUX_STATE)
+static inline rwlock_t *ksu_get_policy_rwlock() { return &selinux_state.ss->policy_rwlock; }
+#elif defined(KSU_COMPAT_HAS_EXPORTED_POLICY_RWLOCK)
+static inline rwlock_t *ksu_get_policy_rwlock() { extern rwlock_t policy_rwlock; return &policy_rwlock; }
 #else
-	db = &policydb;
+static inline rwlock_t *ksu_get_policy_rwlock() { return NULL; }
 #endif
-	return db;
-}
 
-static DEFINE_MUTEX(ksu_rules);
+#endif // < 5.10
 
-
-static inline int apply_kernelsu_rules_fn(void *ptr)
+static int apply_kernelsu_rules_fn(void *ptr)
 {
 	struct policydb *db = (struct policydb *)ptr;
 
@@ -148,10 +145,43 @@ out_unlock:
 
 	db = get_policydb();
 
-	mutex_lock(&ksu_rules);
-	stop_machine(apply_kernelsu_rules_fn, (void *)db, NULL);
-	mutex_unlock(&ksu_rules);
+	rwlock_t *lock = ksu_get_policy_rwlock();
+	if (!lock)
+		goto do_stop_machine;
 
+	// HACK: lock is held with preempt enabled!
+	pr_info("%s: type: policy_rwlock \n", __func__);
+	write_lock(lock);
+	preempt_enable();
+
+	// we do this dance since both kernel and userspace can trigger this
+	if (likely(current && current->mm))
+		goto has_current_mm;
+
+	apply_kernelsu_rules_fn((void *)db);
+	goto out_unlock;
+
+has_current_mm:
+	;
+	// HACK: raise priority of this to the heavens
+	int old_policy = current->policy;
+	struct sched_param old_param = { .sched_priority = current->rt_priority };
+	struct sched_param new_param = { .sched_priority = 50 };
+
+	sched_setscheduler_nocheck(current, 1, &new_param); // raise, fifo, 50
+	apply_kernelsu_rules_fn((void *)db);
+	sched_setscheduler_nocheck(current, old_policy, &old_param); // restore
+
+out_unlock:
+	preempt_disable();
+	write_unlock(lock);
+	goto out_flush;
+
+do_stop_machine:
+	pr_info("%s: type: stop_machine()\n", __func__);
+	stop_machine(apply_kernelsu_rules_fn, (void *)db, NULL);
+
+out_flush:
 	smp_mb();
 	reset_avc_cache();
 #endif
@@ -561,7 +591,7 @@ struct handle_sepolicy_args {
 	u64 ctx_data_len;
 };
 
-static int handle_spolicy_fn(void *data)
+static int handle_sepolicy_fn(void *data)
 {
 	struct sepol_batch_cursor cursor;
 	int ret = 0;
@@ -607,6 +637,7 @@ static int handle_spolicy_fn(void *data)
 		if (ret < 0)
 			pr_err("sepol: cmd #%u failed, cmd=%u subcmd=%u.\n", cmd_index, header.cmd, header.subcmd);
 		else {
+			pr_info("sepol: cmd #%u success, cmd=%u subcmd=%u.\n", cmd_index, header.cmd, header.subcmd);
 			success_cmd_count++;
 		}
 
@@ -615,8 +646,30 @@ static int handle_spolicy_fn(void *data)
 
 out:
 	*(int *)(ctx->ctx_success_cmd_count) = success_cmd_count;
-	return 0;
+	return ret;
 }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
+#define ksu_kvmalloc kvmalloc
+#define ksu_kvfree kvfree
+#else
+static inline void *ksu_kvmalloc(size_t size, gfp_t flags)
+{
+	void *buf = kmalloc(size, flags);
+	if (!buf)
+		buf = vmalloc(size);
+	
+	return buf;
+}
+
+static inline void ksu_kvfree(void *buf)
+{
+	if (is_vmalloc_addr(buf))
+		vfree(buf);
+	else
+		kfree(buf);
+}
+#endif
 
 int handle_sepolicy(void __user *user_data, u64 data_len)
 {
@@ -630,10 +683,7 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
 	if (data_len > KSU_SEPOLICY_MAX_BATCH_SIZE)
 		return -E2BIG;
 
-	// upstream uses kvmalloc here
-	payload = kmalloc((size_t)data_len, GFP_KERNEL);
-	if (!payload)
-		payload = vmalloc((size_t)data_len);
+	payload = ksu_kvmalloc((size_t)data_len, GFP_KERNEL);
 	if (!payload)
 		return -ENOMEM;
 
@@ -651,20 +701,48 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
 	ctx.ctx_payload = (void *)payload;
 	ctx.ctx_data_len = (u64)data_len;
 
-	mutex_lock(&ksu_rules);
-	stop_machine(handle_spolicy_fn, (void *)&ctx, NULL);
-	mutex_unlock(&ksu_rules);
+	// HACK: lock is held with preempt enabled!
+	rwlock_t *lock = ksu_get_policy_rwlock();
+	if (!lock)
+		goto do_stop_machine;
+
+	write_lock(lock);
+	preempt_enable();
+
+	if (likely(current && current->mm))
+		goto has_current_mm;
+
+	ret = handle_sepolicy_fn((void *)&ctx);
+	goto out_unlock;
+
+has_current_mm:
+	;
+	int old_policy = current->policy;
+	struct sched_param old_param = { .sched_priority = current->rt_priority };
+	struct sched_param new_param = { .sched_priority = 50 };
+
+	sched_setscheduler_nocheck(current, 1, &new_param);
+	ret = handle_sepolicy_fn((void *)&ctx);
+	sched_setscheduler_nocheck(current, old_policy, &old_param);
+
+out_unlock:
+	preempt_disable();
+	write_unlock(lock);
+	goto out_done;
+
+do_stop_machine:
+	ret = stop_machine(handle_sepolicy_fn, (void *)&ctx, NULL);
+
+out_done:
+	if (ret)
+		goto out_free;
 
 	smp_mb();
 	reset_avc_cache();
 	ret = success_cmd_count;
 
 out_free:
-	// kvfree
-	if (is_vmalloc_addr(payload))
-		vfree(payload);
-	else
-		kfree(payload);
+	ksu_kvfree(payload);
 
 	return ret;
 }

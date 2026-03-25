@@ -90,12 +90,10 @@ void on_boot_completed(void)
 	ksu_avc_spoof_late_init(); // slow_avc_init kp
 }
 
-static bool init_second_stage_executed = false;
-
 // since _ksud handler only uses argv and envp for comparisons
 // this can probably work
 // adapted from ksu_handle_execveat_ksud
-static int ksu_handle_bprm_ksud(const char *filename, const char *argv1, const char *envp, size_t envp_len)
+static inline int ksu_handle_bprm_ksud(const char *filename, const char *argv1, const char *envp, size_t envp_len)
 {
 	static const char app_process[] = "/system/bin/app_process";
 	static bool first_app_process = true;
@@ -104,6 +102,7 @@ static int ksu_handle_bprm_ksud(const char *filename, const char *argv1, const c
 	static const char system_bin_init[] = "/system/bin/init";
 	/* This applies to versions between Android 6 ~ 9  */
 	static const char old_system_init[] = "/init";
+	static bool init_second_stage_executed = false;
 
 	// return early when disabled
 	if (!ksu_execveat_hook)
@@ -115,63 +114,56 @@ static int ksu_handle_bprm_ksud(const char *filename, const char *argv1, const c
 	// debug! remove me!
 	pr_info("%s: filename: %s argv1: %s envp_len: %zu\n", __func__, filename, argv1, envp_len);
 
-#ifdef CONFIG_KSU_DEBUG
-	const char *envp_n = envp;
-	unsigned int envc = 1;
-	do {
-		pr_info("%s: envp[%d]: %s\n", __func__, envc, envp_n);
-		envp_n += strlen(envp_n) + 1;
-		envc++;
-	} while (envp_n < envp + 256);
-#endif
-
 	if (init_second_stage_executed)
 		goto first_app_process;
 
 	// /system/bin/init with argv1
 	if (!strcmp(filename, system_bin_init) && argv1 && !strcmp(argv1, "second_stage")) {
 		pr_info("%s: /system/bin/init second_stage executed\n", __func__);
+		init_second_stage_executed = true;
 		apply_kernelsu_rules();
 		cache_sid();
 		setup_ksu_cred();
-		init_second_stage_executed = true;
 	}
 
 	// /init with argv1
 	if (!strcmp(filename, old_system_init) && argv1 && !strcmp(argv1, "--second-stage")) {
 		pr_info("%s: /init --second-stage executed\n", __func__);
+		init_second_stage_executed = true;
 		apply_kernelsu_rules();
 		cache_sid();
 		setup_ksu_cred();
-		init_second_stage_executed = true;
 	}
 
 	if (!envp || !envp_len)
 		goto first_app_process;
 
-	// /init without argv1/useless-argv1 but usable envp
-	// untested! TODO: test and debug me!
-	if (!init_second_stage_executed && !strcmp(filename, old_system_init)) {
+	if (init_second_stage_executed)
+		goto first_app_process;
 
-		// we hunt for "INIT_SECOND_STAGE"
-		const char *envp_n = envp;
-		unsigned int envc = 1;
-		do {
-			if (strstarts(envp_n, "INIT_SECOND_STAGE"))
-				break;
-			envp_n += strlen(envp_n) + 1;
-			envc++;
-		} while (envp_n < envp + envp_len);
-		pr_info("%s: envp[%d]: %s\n", __func__, envc, envp_n);
-		
-		if (!strcmp(envp_n, "INIT_SECOND_STAGE=1")
-			|| !strcmp(envp_n, "INIT_SECOND_STAGE=true") ) {
-			pr_info("%s: /init +envp: INIT_SECOND_STAGE executed\n", __func__);
-			apply_kernelsu_rules();
-			cache_sid();
-			setup_ksu_cred();
-			init_second_stage_executed = true;
-		}
+	// /init without argv1/useless-argv1 but usable envp
+	// we don't check filename for this as we are a step late on bprm
+	// the envp we see is the one before it forks.
+	// we hunt for "INIT_SECOND_STAGE"
+	const char *envp_n = envp;
+	unsigned int envc = 1;
+	do {
+		if (IS_ENABLED(CONFIG_KSU_DEBUG))
+			pr_info("%s: envp[%d]: %s\n", __func__, envc, envp_n);
+
+		if (strstarts(envp_n, "INIT_SECOND_STAGE"))
+			break;
+
+		envp_n += strlen(envp_n) + 1;
+		envc++;
+	} while (envp_n < envp + envp_len);
+
+	if (!strcmp(envp_n, "INIT_SECOND_STAGE=1") || !strcmp(envp_n, "INIT_SECOND_STAGE=true") ) {
+		pr_info("%s: /init +envp: %s executed\n", __func__, envp_n);
+		init_second_stage_executed = true;
+		apply_kernelsu_rules();
+		cache_sid();
+		setup_ksu_cred();
 	}
 
 first_app_process:
@@ -185,7 +177,7 @@ first_app_process:
 	return 0;
 }
 
-int ksu_handle_pre_ksud(const char *filename)
+static noinline int ksu_handle_pre_ksud(const char *filename)
 {
 	if (likely(!ksu_execveat_hook))
 		return 0;
@@ -345,26 +337,16 @@ static bool is_init_rc(struct file *fp)
 	return true;
 }
 
-static void ksu_handle_initrc(struct file *file)
+static noinline void ksu_install_rc_hook(struct file *file)
 {
-	if (!ksu_vfs_read_hook) {
+	if (likely(!ksu_vfs_read_hook))
 		return;
-	}
 
-	if (!is_init(get_current_cred()))
+	if (!is_init(current_cred()))
 		return;
 
 	if (!is_init_rc(file)) {
 		return;
-	}
-
-	// insurance for failed second stage apply
-	if (!init_second_stage_executed) {
-		pr_info("%s: forcing second stage requirements\n", __func__);
-		apply_kernelsu_rules();
-		cache_sid();
-		setup_ksu_cred();
-		init_second_stage_executed = true;	
 	}
 
 	// we only process the first read
@@ -401,20 +383,13 @@ static void ksu_handle_initrc(struct file *file)
 	return;
 }
 
-// NOTE: https://github.com/tiann/KernelSU/commit/df640917d11dd0eff1b34ea53ec3c0dc49667002
-// - added 260110, seems needed for A17
-
 #define STAT_NATIVE 0
 #define STAT_STAT64 1
 
-static __always_inline void ksu_common_newfstat_ret(unsigned long fd_long, void **statbuf_ptr, const int type)
+__attribute__((cold))
+static noinline void ksu_common_newfstat_ret(unsigned long fd_long, void **statbuf_ptr, const int type)
 {
-	
-	if (!ksu_vfs_read_hook) {
-		return;
-	}
-
-	if (!is_init(get_current_cred()))
+	if (!is_init(current_cred()))
 		return;
 
 	struct file *file = fget(fd_long);
@@ -468,7 +443,9 @@ void ksu_handle_newfstat_ret(unsigned int *fd, struct stat __user **statbuf_ptr)
 {
 	unsigned long fd_long = (unsigned long)*fd;
 
-	// native
+	if (likely(!ksu_vfs_read_hook))
+		return;
+
 	ksu_common_newfstat_ret(fd_long, (void **)statbuf_ptr, STAT_NATIVE);
 }
 
@@ -477,7 +454,9 @@ void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **statbuf_pt
 {
 	unsigned long fd_long = (unsigned long)*fd;
 
-	// 32-bit call uses this!
+	if (likely(!ksu_vfs_read_hook))
+		return;
+
 	ksu_common_newfstat_ret(fd_long, (void **)statbuf_ptr, STAT_STAT64);
 }
 #endif

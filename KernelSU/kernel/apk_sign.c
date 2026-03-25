@@ -50,7 +50,7 @@ static int ksu_sha256(const unsigned char *data, unsigned int datalen,
 	return ret;
 }
 
-static bool check_block(struct file *fp, u32 *size4, loff_t *pos, u32 *offset,
+static noinline bool check_block(struct file *fp, u32 *size4, loff_t *pos, u32 *offset,
 			unsigned expected_size, const char *expected_sha256)
 {
 	ksu_kernel_read_compat(fp, size4, 0x4, pos); // signer-sequence length
@@ -217,7 +217,6 @@ static __always_inline bool check_v2_signature(char *path,
 
 	ksu_kernel_read_compat(fp, &size8, 0x8, &pos);
 	ksu_kernel_read_compat(fp, buffer, 0x10, &pos);
-	// !! remove this casting to char just to strcmp
 	if (memcmp(buffer, "APK Sig Block 42", 16)) {
 		goto clean;
 	}
@@ -382,7 +381,7 @@ bool is_manager_apk(char *path)
 	return (check_v2_signature(path, 0x363, "4359c171f32543394cbc23ef908c4bb94cad7c8087002ba164c8230948c21549") // dummy.keystore
 	|| check_v2_signature(path, EXPECTED_SIZE, EXPECTED_HASH)  // kernelsu official
 	|| check_v2_signature(path, 0x375, "484fcba6e6c43b1fb09700633bf2fb4758f13cb0b2f4457b80d075084b26c588")  // KOWX712/KernelSU
-//	|| check_v2_signature(path, 0x3e6, "79e590113c4c4c0c222978e413a5faa801666957b1212a328e46c00c69821bf7")  // rifsxd/KernelSU-Next, temp remove, reason: old handle_spolicy
-//	|| check_v2_signature(path, 0x396, "f415f4ed9435427e1fdf7f1fccd4dbc07b3d6b8751e4dbcec6f19671f427870b")  // rsuntk/KernelSU, temp remove, reason: old handle_spolicy
+	|| check_v2_signature(path, 0x3e6, "79e590113c4c4c0c222978e413a5faa801666957b1212a328e46c00c69821bf7")  // rifsxd/KernelSU-Next
+//	|| check_v2_signature(path, 0x396, "f415f4ed9435427e1fdf7f1fccd4dbc07b3d6b8751e4dbcec6f19671f427870b")  // rsuntk/KernelSU, temp remove, reason: old handle_sepolicy
 	);
 }

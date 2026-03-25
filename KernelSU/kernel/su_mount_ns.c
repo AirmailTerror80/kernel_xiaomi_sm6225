@@ -94,11 +94,9 @@ try_setns:
 	}
 #else
 try_setns:
-	barrier(); // to shutup declaration after label
-
+	;
 	// on UL kernels we can try to just feed it with struct path of /proc/1/ns/mnt
 	// we do NOT have ns_get_path. if it works, GOOD. if it doesn't I don't care.
-
 	struct path ns_path;
 	const struct cred *saved = override_creds(ksu_cred);
 

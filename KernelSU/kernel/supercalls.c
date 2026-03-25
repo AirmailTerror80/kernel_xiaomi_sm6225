@@ -633,6 +633,36 @@ static int add_try_umount(void __user *arg)
 	return 0;
 }
 
+static int do_set_init_pgrp(void __user *arg)
+{
+	int err;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+	struct pid *pids[PIDTYPE_MAX] = { 0 };
+#endif
+	write_lock_irq(&tasklist_lock);
+	struct task_struct *p = current->group_leader;
+	struct pid *init_group = task_pgrp(&init_task);
+
+	err = -EPERM;
+	if (task_session(p) != task_session(&init_task))
+		goto out;
+
+	err = 0;
+	if (task_pgrp(p) != init_group) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+		change_pid(pids, p, PIDTYPE_PGID, init_group);
+#else
+		change_pid(p, PIDTYPE_PGID, init_group);
+#endif
+	}
+out:
+	write_unlock_irq(&tasklist_lock);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+	free_pids(pids);
+#endif
+	return err;
+}
+
 // IOCTL handlers mapping table
 static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
 	{ .cmd = KSU_IOCTL_GRANT_ROOT, .name = "GRANT_ROOT", .handler = do_grant_root, .perm_check = allowed_for_su },
@@ -655,11 +685,11 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
 	{ .cmd = KSU_IOCTL_MANAGE_MARK, .name = "MANAGE_MARK", .handler = do_manage_mark, .perm_check = manager_or_root },
 	{ .cmd = KSU_IOCTL_NUKE_EXT4_SYSFS, .name = "NUKE_EXT4_SYSFS", .handler = do_nuke_ext4_sysfs, .perm_check = manager_or_root },
 	{ .cmd = KSU_IOCTL_ADD_TRY_UMOUNT, .name = "ADD_TRY_UMOUNT", .handler = add_try_umount, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_SET_INIT_PGRP, .name = "SET_INIT_PGRP", .handler = do_set_init_pgrp, .perm_check = only_root },
 	{ .cmd = 0, .name = NULL, .handler = NULL, .perm_check = NULL } // Sentinel
 };
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0)
-#include <linux/task_work.h>
 
 struct ksu_install_fd_tw {
 	struct callback_head cb;

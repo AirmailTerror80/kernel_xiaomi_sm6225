@@ -62,10 +62,6 @@
 #include "kp_ksud.c"
 #endif
 
-#ifdef CONFIG_KSU_KRETPROBES_SUCOMPAT
-#include "rp_sucompat.c"
-#endif
-
 #ifdef CONFIG_KSU_EXTRAS
 #include "extras.c"
 #endif
@@ -82,7 +78,6 @@ extern void ksu_supercalls_init();
 #else
 	#define FEAT_1 ""
 #endif
-
 #if defined(CONFIG_KSU_KRETPROBES_SUCOMPAT)
 	#define FEAT_2 " +rp_sucompat"
 #else
@@ -103,8 +98,13 @@ extern void ksu_supercalls_init();
 #else
 	#define FEAT_5 ""
 #endif
+#if defined(KSU_COMPAT_HAS_EXPORTED_POLICY_RWLOCK)
+	#define FEAT_6 " +policy_rwlock"
+#else
+	#define FEAT_6 ""
+#endif
 
-#define EXTRA_FEATURES FEAT_1 FEAT_2 FEAT_3 FEAT_4 FEAT_5
+#define EXTRA_FEATURES FEAT_1 FEAT_2 FEAT_3 FEAT_4 FEAT_5 FEAT_6
 
 int __init kernelsu_init(void)
 {

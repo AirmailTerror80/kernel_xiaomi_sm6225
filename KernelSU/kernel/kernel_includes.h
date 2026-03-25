@@ -111,6 +111,7 @@
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 #include <linux/sched/task_stack.h>
+#include <uapi/linux/sched/types.h>
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0)
@@ -118,5 +119,37 @@
 #include <linux/sched/task.h>
 #include <linux/sched/user.h>
 #endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0)
+#include <linux/task_work.h>
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0)
+#include <linux/lsm_hooks.h>
+#endif
+
+/**
+ * replace common mem/str functions with builtins
+ * so legacy kernels get better inlining and optimized routines (with newer compielrs)
+ * a lot of people rice their flags (mcpu/march), this'll be a good reward for them.
+ * minimum that people use is gcc 4.9 for 3.x kernels, so these are fineee
+ * https://github.com/gcc-mirror/gcc/blob/releases/gcc-4.9/gcc/builtins.def#L562
+ *
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0) && !defined(CONFIG_FORTIFY_SOURCE)
+
+#define memcmp		__builtin_memcmp
+#define memcpy		__builtin_memcpy
+#define memmove		__builtin_memmove
+#define memset		__builtin_memset
+#define strchr		__builtin_strchr
+#define strcmp		__builtin_strcmp
+#define strcpy		__builtin_strcpy
+#define strlen		__builtin_strlen
+#define strncmp		__builtin_strncmp
+#define strncpy		__builtin_strncpy
+#define strstr		__builtin_strstr  // huge but used only twice, no big deal.
+
+#endif // < 5.10 && !CONFIG_FORTIFY_SOURCE
 
 #endif // __KSU_H_KERNEL_INCLUDES

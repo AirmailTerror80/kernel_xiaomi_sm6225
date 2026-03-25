@@ -1,10 +1,11 @@
 #ifndef __KSU_H_KERNEL_COMPAT
 #define __KSU_H_KERNEL_COMPAT
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
-#include <../security/keys/internal.h>
+#if defined(CONFIG_KEYS) && LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
 
+extern int install_session_keyring_to_cred(struct cred *cred, struct key *keyring);
 struct key *init_session_keyring = NULL;
+
 bool is_init(const struct cred* cred);
 
 static inline int install_session_keyring(struct key *keyring)
@@ -27,7 +28,8 @@ static inline int install_session_keyring(struct key *keyring)
 
 // this is on tgcred on < 3.8
 // while we can grab that one, it seems to not actually be needed 
-static void ksu_grab_init_session_keyring(const char *filename)
+__attribute__((cold))
+static noinline void ksu_grab_init_session_keyring(const char *filename)
 {
 	if (init_session_keyring)
 		return;
@@ -38,7 +40,7 @@ static void ksu_grab_init_session_keyring(const char *filename)
 	if (!!strcmp(current->comm, "init"))
 		return;
 
-	if (!!!is_init(get_current_cred()))
+	if (!!!is_init(current_cred()))
 		return;
 
 	// thats surely some exclamation comedy
@@ -52,16 +54,16 @@ static void ksu_grab_init_session_keyring(const char *filename)
 	init_session_keyring = key_get(keyring);
 
 	pr_info("%s: init_session_keyring: 0x%p \n", __func__, init_session_keyring);
-
 }
+
 struct file *ksu_filp_open_compat(const char *filename, int flags, umode_t mode)
 {
 	// normally we only put this on ((current->flags & PF_WQ_WORKER) || (current->flags & PF_KTHREAD))
 	// but in the grand scale of things, this does NOT matter.
 	// pr_info("installing init session keyring for older kernel\n");
-	if (init_session_keyring != NULL && !current_cred()->session_keyring) {
+	if (init_session_keyring && !current_cred()->session_keyring)
 		install_session_keyring(init_session_keyring);
-	}
+
 	return filp_open(filename, flags, mode);
 }
 #else
@@ -119,15 +121,13 @@ __weak int close_fd(unsigned fd)
 }
 #endif
 
-extern long copy_from_user_nofault(void *dst, const void __user *src, size_t size);
-
-/*
+/**
  * ksu_copy_from_user_retry
  * try nofault copy first, if it fails, try with plain
  * paramters are the same as copy_from_user
  * 0 = success
- *
  */
+extern long copy_from_user_nofault(void *dst, const void __user *src, size_t size);
 static long ksu_copy_from_user_retry(void *to, const void __user *from, unsigned long count)
 {
 	long ret = copy_from_user_nofault(to, from, count);
@@ -184,10 +184,7 @@ static inline struct task_security_struct *selinux_cred(const struct cred *cred)
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION (4, 15, 0)
-__weak void groups_sort(struct group_info *group_info)
-{
-	return;
-}
+__weak void groups_sort(struct group_info *group_info) { } // no-op
 #endif
 
 #endif

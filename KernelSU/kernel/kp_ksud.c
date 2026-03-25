@@ -4,17 +4,24 @@
 // upstream: https://github.com/tiann/KernelSU/commit/df640917d11dd0eff1b34ea53ec3c0dc49667002
 
 // this is a bit different from copy_from_user_retry
-// here we just disable preempt and try nofault again
+// here we just enable preempt and try again
 // we use this inside context that can't sleep
-static long ksu_copy_from_user_nofault_retry(void *to, const void __user *from, unsigned long count)
+static long ksu_copy_from_user_fuck_faults(void *to, const void __user *from, unsigned long count)
 {
 	long ret = copy_from_user_nofault(to, from, count);
 	if (likely(!ret))
 		return ret;
 
-	preempt_disable();
-	ret = copy_from_user_nofault(to, from, count);
-	preempt_enable();
+	bool got_flipped = false;
+	if (!preemptible()) {
+		preempt_enable();
+		got_flipped = true;
+	}
+
+	ret = copy_from_user(to, from, count);
+
+	if (got_flipped)
+		preempt_disable();
 
 	return ret;
 }
@@ -26,7 +33,7 @@ static int sys_newfstat_handler_pre(struct kretprobe_instance *p, struct pt_regs
 	void *statbuf = PT_REGS_PARM2(real_regs);
 	*(void **)&p->data = NULL;
 
-	if (!is_init(get_current_cred()))
+	if (!is_init(current_cred()))
 		return 0;
 
 	struct file *file = fget(fd);
@@ -53,7 +60,7 @@ static int sys_newfstat_handler_post(struct kretprobe_instance *p, struct pt_reg
 	void __user *st_size_ptr = statbuf + offsetof(struct stat, st_size);
 	long size, new_size;
 
-	if (ksu_copy_from_user_nofault_retry(&size, st_size_ptr, sizeof(long))) {
+	if (ksu_copy_from_user_fuck_faults(&size, st_size_ptr, sizeof(long))) {
 		pr_info("kp_ksud: newfstat: read statbuf 0x%lx failed \n", (unsigned long)st_size_ptr);
 		return 0;
 	}
@@ -86,7 +93,7 @@ static int sys_fstat64_handler_pre(struct kretprobe_instance *p, struct pt_regs 
 	void *statbuf = PT_REGS_PARM2(real_regs);
 	*(void **)&p->data = NULL;
 
-	if (!is_init(get_current_cred()))
+	if (!is_init(current_cred()))
 		return 0;
 
 	struct file *file = fget(fd);
@@ -114,7 +121,7 @@ static int sys_fstat64_handler_post(struct kretprobe_instance *p, struct pt_regs
 	void __user *st_size_ptr = statbuf + offsetof(struct stat64, st_size);
 	long size, new_size;
 
-	if (ksu_copy_from_user_nofault_retry(&size, st_size_ptr, sizeof(long long))) {
+	if (ksu_copy_from_user_fuck_faults(&size, st_size_ptr, sizeof(long long))) {
 		pr_info("kp_ksud: fstat64: read statbuf 0x%lx failed \n", (unsigned long)st_size_ptr);
 		return 0;
 	}

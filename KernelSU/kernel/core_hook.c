@@ -185,20 +185,17 @@ LSM_HANDLER_TYPE ksu_bprm_check(struct linux_binprm *bprm)
 
 	ksu_grab_init_session_keyring((const char *)bprm->filename);
 
-	ksu_handle_pre_ksud((char *)bprm->filename);
+	ksu_handle_pre_ksud((const char *)bprm->filename);
 
 	return 0;
 }
-
-bool ksu_vfs_read_hook __read_mostly;
-static void ksu_handle_initrc(struct file *file);
 
 LSM_HANDLER_TYPE ksu_file_permission(struct file *file, int mask)
 {
 	if (likely(!ksu_vfs_read_hook))
 		return 0;
 
-	ksu_handle_initrc(file);
+	ksu_install_rc_hook(file);
 
 	return 0;
 }
@@ -217,7 +214,6 @@ static int ksu_task_fix_setuid(struct cred *new, const struct cred *old,
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0)
-#include <linux/lsm_hooks.h>
 static struct security_hook_list ksu_hooks[] = {
 	LSM_HOOK_INIT(inode_rename, ksu_inode_rename),
 	LSM_HOOK_INIT(task_fix_setuid, ksu_task_fix_setuid),
@@ -245,7 +241,7 @@ static void ksu_lsm_hook_init(void)
 extern struct security_operations selinux_ops;
 
 static int (*orig_inode_rename) (struct inode *old_dir, struct dentry *old_dentry,
-			     struct inode *new_dir, struct dentry *new_dentry);
+			     struct inode *new_dir, struct dentry *new_dentry) = NULL;
 static int hook_inode_rename(struct inode *old_inode, struct dentry *old_dentry,
 			    struct inode *new_inode, struct dentry *new_dentry)
 {
@@ -253,21 +249,21 @@ static int hook_inode_rename(struct inode *old_inode, struct dentry *old_dentry,
 	return orig_inode_rename(old_inode, old_dentry, new_inode, new_dentry);
 }
 
-static int (*orig_task_fix_setuid) (struct cred *new, const struct cred *old, int flags);
+static int (*orig_task_fix_setuid) (struct cred *new, const struct cred *old, int flags) = NULL;
 static int hook_task_fix_setuid(struct cred *new, const struct cred *old, int flags)
 {
 	ksu_task_fix_setuid(new, old, flags);
 	return orig_task_fix_setuid(new, old, flags);
 }
 
-static int (*orig_bprm_check_security)(struct linux_binprm *bprm);
+static int (*orig_bprm_check_security)(struct linux_binprm *bprm) = NULL;
 static int hook_bprm_check_security(struct linux_binprm *bprm)
 {
 	ksu_bprm_check(bprm);
 	return orig_bprm_check_security(bprm);
 }
 
-static int (*orig_file_permission) (struct file *file, int mask);
+static int (*orig_file_permission) (struct file *file, int mask) = NULL;
 static int hook_file_permission(struct file *file, int mask)
 {
 
@@ -370,10 +366,7 @@ static void ksu_lsm_hook_init(void)
 #endif // < 4.2
 
 #else
-void __init ksu_lsm_hook_init(void)
-{
-	// nothing, no-op
-}
+void __init ksu_lsm_hook_init(void) { } // nothing, no-op
 #endif // CONFIG_KSU_LSM_SECURITY_HOOKS
 
 void __init ksu_core_init(void)

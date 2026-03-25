@@ -143,7 +143,7 @@ FILLDIR_RETURN_TYPE my_actor(MY_ACTOR_CTX_ARG, const char *name,
 #define S_MAGIC_COMPAT(x) ((x)->f_path.dentry->d_inode->i_sb->s_magic)
 #endif
 
-void search_manager(const char *path, int depth, struct list_head *uid_data)
+static noinline void search_manager(const char *path, int depth, struct list_head *uid_data)
 {
 	int i, stop = 0;
 	struct list_head data_path_list;
@@ -367,6 +367,13 @@ static int throne_tracker_thread(void *data)
 
 	mutex_lock(&throne_tracker_mutex);
 
+	// lessen that window where user opens manager right away, yet its not crowned
+	// we are async/non-blocking in these kthreads
+	// sched_set_fifo_low
+	struct sched_param param = { 0 };
+	param.sched_priority = 1;
+	sched_setscheduler_nocheck(current, 1, &param);
+
 	escape_to_root_forced();
 	throne_tracker_fn(prune_only);
 
@@ -390,10 +397,6 @@ void track_throne(bool prune_only)
 #endif
 
 	// HACK: force cast prune_only to be a void *
-	// this way we won't need to create a struct.
-	// there is only one argument anyway for track_throne()
-	// so yes, true or false is now a void pointer.
-	// reality is what I want to be.
 	kthread_run(throne_tracker_thread, (void *)prune_only, "thronetracker");
 }
 

@@ -242,10 +242,8 @@ bool __ksu_is_allow_uid(uid_t uid)
 		return true;
 	}
 
-#ifdef CONFIG_KSU_DEBUG
-	if (unlikely(uid == SHELL_UID))
+	if (IS_ENABLED(CONFIG_KSU_DEBUG) && unlikely(uid == SHELL_UID))
 		return true;
-#endif
 
 	if (likely(uid <= BITMAP_UID_MAX)) {
 		return !!(allow_list_bitmap[uid / BITS_PER_BYTE] &
@@ -303,10 +301,8 @@ void ksu_get_root_profile(uid_t uid, struct root_profile *profile)
 		goto use_default;
 	}
 
-#ifdef CONFIG_KSU_DEBUG
-	if (unlikely(uid == SHELL_UID))
+	if (IS_ENABLED(CONFIG_KSU_DEBUG) && unlikely(uid == SHELL_UID))
 		goto use_default;
-#endif
 
 	rcu_read_lock();
 	list_for_each_entry_rcu (p, &allow_list, list) {
