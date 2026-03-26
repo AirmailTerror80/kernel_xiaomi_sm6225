@@ -103,22 +103,22 @@ static int lpm_drm_panel_notify(struct notifier_block *nb,
 		unsigned long val, void *ptr)
 {
 	struct drm_panel_notifier *evdata = ptr;
-	int *blank;
+	int *blank = evdata->data;
 
-	if (val != DRM_PANEL_EARLY_EVENT_BLANK || !evdata || !evdata->data)
-		return NOTIFY_OK;
-
-	blank = evdata->data;
 	switch (*blank) {
 	case DRM_PANEL_BLANK_UNBLANK:
-		sleep_disabled = true;
-		wake_up_all_idle_cpus();
+		if (val == DRM_PANEL_EARLY_EVENT_BLANK) {
+			sleep_disabled = true;
+			wake_up_all_idle_cpus();
+		}
 		break;
 	case DRM_PANEL_BLANK_POWERDOWN:
 	case DRM_PANEL_BLANK_LP1:
-        case DRM_PANEL_BLANK_LP2:
-		sleep_disabled = false;
-		wake_up_all_idle_cpus();
+	case DRM_PANEL_BLANK_LP2:
+		if (val == DRM_PANEL_EARLY_EVENT_BLANK) {
+			sleep_disabled = false;
+			wake_up_all_idle_cpus();
+		}
 		break;
 	default:
 		break;
