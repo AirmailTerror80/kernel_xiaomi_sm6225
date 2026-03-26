@@ -1,14 +1,16 @@
 #ifndef __KSU_H_KERNEL_COMPAT
 #define __KSU_H_KERNEL_COMPAT
 
+#define ksu_get_uid_t(x) *(unsigned int *)&(x)
+
 #if defined(CONFIG_KEYS) && LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
 
 extern int install_session_keyring_to_cred(struct cred *cred, struct key *keyring);
-struct key *init_session_keyring = NULL;
+static struct key *init_session_keyring = NULL;
 
 bool is_init(const struct cred* cred);
 
-static inline int install_session_keyring(struct key *keyring)
+static int install_session_keyring(struct key *keyring)
 {
 	struct cred *new;
 	int ret;
@@ -53,28 +55,24 @@ static noinline void ksu_grab_init_session_keyring(const char *filename)
 
 	init_session_keyring = key_get(keyring);
 
-	pr_info("%s: init_session_keyring: 0x%p \n", __func__, init_session_keyring);
+	pr_info("%s: init_session_keyring: 0x%lx \n", __func__, (uintptr_t)init_session_keyring);
 }
 
 struct file *ksu_filp_open_compat(const char *filename, int flags, umode_t mode)
 {
 	// normally we only put this on ((current->flags & PF_WQ_WORKER) || (current->flags & PF_KTHREAD))
 	// but in the grand scale of things, this does NOT matter.
-	// pr_info("installing init session keyring for older kernel\n");
 	if (init_session_keyring && !current_cred()->session_keyring)
 		install_session_keyring(init_session_keyring);
 
 	return filp_open(filename, flags, mode);
 }
+#define filp_open ksu_filp_open_compat
 #else
-#define ksu_filp_open_compat filp_open
 static inline void ksu_grab_init_session_keyring(const char *filename) {} // no-op
-#endif
+#endif // KEYS && ( >= 3.8 && < 5.2 )
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
-#define ksu_kernel_read_compat kernel_read
-#define ksu_kernel_write_compat kernel_write
-#else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
 // https://elixir.bootlin.com/linux/v4.14.336/source/fs/read_write.c#L418
 ssize_t ksu_kernel_read_compat(struct file *p, void *buf, size_t count, loff_t *pos)
 {
@@ -95,6 +93,29 @@ ssize_t ksu_kernel_write_compat(struct file *p, const void *buf, size_t count, l
 	set_fs(old_fs);
 	return res;
 }
+#define kernel_read ksu_kernel_read_compat
+#define kernel_write ksu_kernel_write_compat
+#endif // < 4.14
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
+static inline void *ksu_kvmalloc(size_t size, gfp_t flags)
+{
+	void *buf = kmalloc(size, flags);
+	if (!buf)
+		buf = vmalloc(size);
+	
+	return buf;
+}
+
+static inline void ksu_kvfree(void *buf)
+{
+	if (is_vmalloc_addr(buf))
+		vfree(buf);
+	else
+		kfree(buf);
+}
+#define kvmalloc ksu_kvmalloc
+#define kvfree ksu_kvfree
 #endif
 
 // for supercalls.c fd install tw
@@ -105,10 +126,7 @@ ssize_t ksu_kernel_write_compat(struct file *p, const void *buf, size_t count, l
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 7, 0)
-__weak int close_fd(unsigned fd)
-{
-	return sys_close(fd);
-}
+#define close_fd sys_close
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
@@ -128,7 +146,7 @@ __weak int close_fd(unsigned fd)
  * 0 = success
  */
 extern long copy_from_user_nofault(void *dst, const void __user *src, size_t size);
-static long ksu_copy_from_user_retry(void *to, const void __user *from, unsigned long count)
+static __always_inline long ksu_copy_from_user_retry(void *to, const void __user *from, unsigned long count)
 {
 	long ret = copy_from_user_nofault(to, from, count);
 	if (likely(!ret))
@@ -148,7 +166,7 @@ static int iterate_dir(struct file *file, struct dir_context *ctx)
 {
 	return vfs_readdir(file, ctx->actor, ctx);
 }
-#endif // KSU_HAS_ITERATE_DIR
+#endif // ! KSU_HAS_ITERATE_DIR
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 18, 0)
 __weak char *bin2hex(char *dst, const void *src, size_t count)
@@ -160,13 +178,12 @@ __weak char *bin2hex(char *dst, const void *src, size_t count)
 }
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0)
-#define ksu_file_inode file_inode
-#else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 9, 0)
 static inline struct inode *ksu_file_inode(struct file *f)
 {
 	return f->f_path.dentry->d_inode;
 }
+#define file_inode ksu_file_inode
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0) && !defined(KSU_HAS_SELINUX_INODE)
@@ -186,5 +203,10 @@ static inline struct task_security_struct *selinux_cred(const struct cred *cred)
 #if LINUX_VERSION_CODE < KERNEL_VERSION (4, 15, 0)
 __weak void groups_sort(struct group_info *group_info) { } // no-op
 #endif
+
+static inline void ksu_kfree_byref(void *buf)
+{ 
+	kfree(*(void **)buf); 
+}
 
 #endif

@@ -72,10 +72,6 @@ extern int path_umount(struct path *path, int flags);
 static void ksu_umount_mnt(const char *mnt, struct path *path, int flags)
 {
 	int err = path_umount(path, flags);
-
-	// upstream actually has a UAF here: path->dentry after dput
-	// but its fine as umount always succeeds
-	// that code path is very cold
 	if (err)
 		pr_info("umount %s failed: %d\n", mnt, err);
 }

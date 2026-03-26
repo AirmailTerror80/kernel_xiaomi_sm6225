@@ -1,6 +1,6 @@
 #if LINUX_VERSION_CODE >= KERNEL_VERSION (6, 7, 0)
 static struct group_info root_groups = { .usage = REFCOUNT_INIT(2) };
-#else 
+#else
 static struct group_info root_groups = { .usage = ATOMIC_INIT(2) };
 #endif
 

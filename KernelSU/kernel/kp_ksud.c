@@ -6,7 +6,7 @@
 // this is a bit different from copy_from_user_retry
 // here we just enable preempt and try again
 // we use this inside context that can't sleep
-static long ksu_copy_from_user_fuck_faults(void *to, const void __user *from, unsigned long count)
+static __always_inline long ksu_copy_from_user_fuck_faults(void *to, const void __user *from, unsigned long count)
 {
 	long ret = copy_from_user_nofault(to, from, count);
 	if (likely(!ret))
@@ -61,19 +61,19 @@ static int sys_newfstat_handler_post(struct kretprobe_instance *p, struct pt_reg
 	long size, new_size;
 
 	if (ksu_copy_from_user_fuck_faults(&size, st_size_ptr, sizeof(long))) {
-		pr_info("kp_ksud: newfstat: read statbuf 0x%lx failed \n", (unsigned long)st_size_ptr);
+		pr_info("kp_ksud: sys_newfstat: read statbuf 0x%lx failed \n", (unsigned long)st_size_ptr);
 		return 0;
 	}
 
 	new_size = size + ksu_rc_len;
-	pr_info("kp_ksud: newfstat: adding ksu_rc_len: %ld -> %ld \n", size, new_size);
+	pr_info("kp_ksud: sys_newfstat: adding ksu_rc_len: %ld -> %ld \n", size, new_size);
 
 	// I do NOT think this matters much for now, we can use copy_to_user
 	// if SHTF then we backport cope_to_user_nofault
 	if (!copy_to_user(st_size_ptr, &new_size, sizeof(long)))
-		pr_info("kp_ksud: newfstat: added ksu_rc_len \n");
+		pr_info("kp_ksud: sys_newfstat: added ksu_rc_len \n");
 	else
-		pr_info("kp_ksud: newfstat: add ksu_rc_len failed: statbuf 0x%lx \n", (unsigned long)st_size_ptr);
+		pr_info("kp_ksud: sys_newfstat: add ksu_rc_len failed: statbuf 0x%lx \n", (unsigned long)st_size_ptr);
 
 	return 0;
 }
@@ -96,7 +96,8 @@ static int sys_fstat64_handler_pre(struct kretprobe_instance *p, struct pt_regs 
 	if (!is_init(current_cred()))
 		return 0;
 
-	struct file *file = fget(fd);
+	// WARNING: LE-only!!!
+	struct file *file = fget(*(unsigned int *)&fd);
 	if (!file)
 		return 0;
 
@@ -122,17 +123,17 @@ static int sys_fstat64_handler_post(struct kretprobe_instance *p, struct pt_regs
 	long size, new_size;
 
 	if (ksu_copy_from_user_fuck_faults(&size, st_size_ptr, sizeof(long long))) {
-		pr_info("kp_ksud: fstat64: read statbuf 0x%lx failed \n", (unsigned long)st_size_ptr);
+		pr_info("kp_ksud: sys_fstat64: read statbuf 0x%lx failed \n", (unsigned long)st_size_ptr);
 		return 0;
 	}
 
 	new_size = size + ksu_rc_len;
-	pr_info("kp_ksud: fstat64: adding ksu_rc_len: %ld -> %ld \n", size, new_size);
+	pr_info("kp_ksud: sys_fstat64: adding ksu_rc_len: %ld -> %ld \n", size, new_size);
 
 	if (!copy_to_user(st_size_ptr, &new_size, sizeof(long)))
-		pr_info("kp_ksud: fstat64: added ksu_rc_len \n");
+		pr_info("kp_ksud: sys_fstat64: added ksu_rc_len \n");
 	else
-		pr_info("kp_ksud: fstat64: add ksu_rc_len failed: statbuf 0x%lx \n", (unsigned long)st_size_ptr);
+		pr_info("kp_ksud: sys_fstat64: add ksu_rc_len failed: statbuf 0x%lx \n", (unsigned long)st_size_ptr);
 
 	return 0;
 }

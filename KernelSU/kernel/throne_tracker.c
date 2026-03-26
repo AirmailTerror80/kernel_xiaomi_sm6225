@@ -143,7 +143,7 @@ FILLDIR_RETURN_TYPE my_actor(MY_ACTOR_CTX_ARG, const char *name,
 #define S_MAGIC_COMPAT(x) ((x)->f_path.dentry->d_inode->i_sb->s_magic)
 #endif
 
-static noinline void search_manager(const char *path, int depth, struct list_head *uid_data)
+void search_manager(const char *path, int depth, struct list_head *uid_data)
 {
 	int i, stop = 0;
 	struct list_head data_path_list;
@@ -151,10 +151,13 @@ static noinline void search_manager(const char *path, int depth, struct list_hea
 	unsigned long data_app_magic = 0;
 
 	// First depth
-	struct data_path data = { };
-	strncpy(data.dirpath, path, DATA_PATH_LEN - 1 );
-	data.depth = depth;
-	list_add_tail(&data.list, &data_path_list);
+	struct data_path *data __attribute__((__cleanup__(ksu_kfree_byref))) = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return;
+
+	strncpy(data->dirpath, path, DATA_PATH_LEN - 1 );
+	data->depth = depth;
+	list_add_tail(&data->list, &data_path_list);
 
 	// we put the apk path we collected here
 	char candidate_path[DATA_PATH_LEN];
@@ -176,7 +179,7 @@ static noinline void search_manager(const char *path, int depth, struct list_hea
 			if (stop)
 				goto skip_iterate;
 
-			struct file *file = ksu_filp_open_compat(pos->dirpath, O_RDONLY | O_NOFOLLOW | O_DIRECTORY, 0);
+			struct file *file = filp_open(pos->dirpath, O_RDONLY | O_NOFOLLOW | O_DIRECTORY, 0);
 			if (IS_ERR(file)) {
 				pr_err("Failed to open directory: %s, err: %ld\n", pos->dirpath, PTR_ERR(file));
 				goto skip_iterate;
@@ -220,7 +223,7 @@ static noinline void search_manager(const char *path, int depth, struct list_hea
 
 skip_iterate:
 			list_del(&pos->list);
-			if (pos != &data)
+			if (pos != data)
 				kfree(pos);
 		}
 	}
@@ -250,13 +253,13 @@ static void throne_tracker_fn(bool prune_only)
 
 	if (unlikely(!(current->flags & PF_KTHREAD))) {
 		pr_info("%s: not a kthread! skip retry for: %s\n", __func__, SYSTEM_PACKAGES_LIST_PATH);
-		fp = ksu_filp_open_compat(SYSTEM_PACKAGES_LIST_PATH, O_RDONLY, 0);
+		fp = filp_open(SYSTEM_PACKAGES_LIST_PATH, O_RDONLY, 0);
 		goto skip_retry;
 	}
 
 	while (tries++ < 10) {
 		if (!is_lock_held(SYSTEM_PACKAGES_LIST_PATH)) {
-			fp = ksu_filp_open_compat(SYSTEM_PACKAGES_LIST_PATH, O_RDONLY, 0);
+			fp = filp_open(SYSTEM_PACKAGES_LIST_PATH, O_RDONLY, 0);
 			if (!IS_ERR(fp)) 
 				break;
 		}
@@ -280,13 +283,13 @@ skip_retry:
 	loff_t line_start = 0;
 	char buf[KSU_MAX_PACKAGE_NAME];
 	for (;;) {
-		ssize_t count = ksu_kernel_read_compat(fp, &chr, sizeof(chr), &pos);
+		ssize_t count = kernel_read(fp, &chr, sizeof(chr), &pos);
 		if (count != sizeof(chr))
 			break;
 		if (chr != '\n')
 			continue;
 
-		count = ksu_kernel_read_compat(fp, buf, sizeof(buf), &line_start);
+		count = kernel_read(fp, buf, sizeof(buf), &line_start);
 
 		struct uid_data *data = kzalloc(sizeof(struct uid_data), GFP_ATOMIC);
 		if (!data) {

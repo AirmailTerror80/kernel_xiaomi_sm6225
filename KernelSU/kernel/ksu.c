@@ -1,6 +1,7 @@
 #include "kernel_includes.h"
 
-#define ksu_get_uid_t(x) *(unsigned int *)&(x)
+#include "klog.h"
+#include "kernel_compat.h"
 
 #include "allowlist.h"
 #include "apk_sign.h"
@@ -9,8 +10,6 @@
 #include "core_hook.h"
 #include "feature.h"
 #include "file_wrapper.h"
-#include "kernel_compat.h"
-#include "klog.h"
 #include "ksud.h"
 #include "ksu.h"
 #include "manager.h"
@@ -43,7 +42,6 @@
 #include "feature.c"
 #include "su_mount_ns.c"
 #include "ksud.c"
-#include "kernel_compat.c"
 #include "file_wrapper.c"
 
 #include "selinux/selinux.c"
@@ -65,6 +63,9 @@
 #ifdef CONFIG_KSU_EXTRAS
 #include "extras.c"
 #endif
+
+// __weak fn's
+#include "kernel_compat.c"
 
 struct cred* ksu_cred;
 

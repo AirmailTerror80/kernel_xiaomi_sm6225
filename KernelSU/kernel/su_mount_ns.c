@@ -30,14 +30,8 @@ static long ksu_sys_setns(int fd, int flags)
 #endif
 }
 #else
-static long ksu_sys_setns(int fd, int flags)
-{
-	return sys_setns(fd, flags);
-}
-__weak int ksys_unshare(unsigned long unshare_flags)
-{
-	return sys_unshare(unshare_flags);
-}
+#define ksu_sys_setns sys_setns
+#define ksys_unshare sys_unshare
 #endif
 
 // global mode , need CAP_SYS_ADMIN and CAP_SYS_CHROOT to perform setns

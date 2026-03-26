@@ -137,7 +137,7 @@
  * https://github.com/gcc-mirror/gcc/blob/releases/gcc-4.9/gcc/builtins.def#L562
  *
  */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0) && !defined(CONFIG_FORTIFY_SOURCE)
+#if !defined(CONFIG_FORTIFY_SOURCE)
 
 #define memcmp		__builtin_memcmp
 #define memcpy		__builtin_memcpy
@@ -149,8 +149,8 @@
 #define strlen		__builtin_strlen
 #define strncmp		__builtin_strncmp
 #define strncpy		__builtin_strncpy
-#define strstr		__builtin_strstr  // huge but used only twice, no big deal.
+#define strstr		__builtin_strstr
 
-#endif // < 5.10 && !CONFIG_FORTIFY_SOURCE
+#endif // !CONFIG_FORTIFY_SOURCE
 
 #endif // __KSU_H_KERNEL_INCLUDES

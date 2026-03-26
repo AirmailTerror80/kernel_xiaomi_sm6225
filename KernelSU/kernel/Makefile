@@ -11,8 +11,8 @@ MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 $(info -- KDIR: $(KDIR))
 $(info -- MDIR: $(MDIR))
 
-# compliant to last upstream kernel change as of 5f9cada
-CFLAGS_ksu.o += -DKSU_VERSION=32389
+# compliant to last upstream kernel change as of 17367e3
+CFLAGS_ksu.o += -DKSU_VERSION=32401
 
 ifndef KSU_EXPECTED_SIZE
 KSU_EXPECTED_SIZE := 0x033b
@@ -44,6 +44,11 @@ endif
 ifeq ($(shell grep -q "^DEFINE_RWLOCK(policy_rwlock);" $(srctree)/security/selinux/ss/services.c; echo $$?),0)
 $(info -- KernelSU/compat: exported policy_rwlock found!)
 CFLAGS_ksu.o += -DKSU_COMPAT_HAS_EXPORTED_POLICY_RWLOCK
+endif
+
+ifeq ($(shell grep -q "cpus_ptr;" $(srctree)/include/linux/sched.h; echo $$?),0)
+$(info -- KernelSU/compat: backported cpus_ptr found!)
+CFLAGS_ksu.o += -DKSU_COMPAT_HAS_BACKPORTED_CPUS_PTR
 endif
 
 # UL, look for read_iter on f_op struct
@@ -81,8 +86,8 @@ CFLAGS_ksu.o += -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-i
 CFLAGS_ksu.o += -Wno-declaration-after-statement -Wno-unused-function -Wno-format -Wno-incompatible-pointer-types
 CFLAGS_ksu.o += -Wno-unused-variable -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
 
-# for check_block, search_manager, around 1200 bytes on stack
-CFLAGS_ksu.o += $(call cc-option, -Wframe-larger-than=1536)
+# so we can see 
+CFLAGS_ksu.o += $(call cc-option, -Wframe-larger-than=1024)
 
 # to make sure we can use builtins
 CFLAGS_REMOVE_ksu.o += -fno-builtin

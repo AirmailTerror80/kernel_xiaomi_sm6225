@@ -2,6 +2,7 @@ menu "KernelSU"
 
 config KSU
 	bool "KernelSU function support"
+	depends on !CPU_BIG_ENDIAN
 	depends on SECURITY_SELINUX
 	select SECCOMP
 	default n
@@ -27,7 +28,7 @@ config KSU_KPROBES_KSUD
 
 config KSU_TAMPER_SYSCALL_TABLE
 	bool "EXPERIMENTAL: tamper sys_call_table for sucompat + sys_reboot"
-	depends on (ARM || ARM64) && !CFI_CLANG && !CFI && !KSU_KRETPROBES_SUCOMPAT
+	depends on (ARM || ARM64) && !CFI_CLANG && !CFI
 	default n
 	help
 	  EXPERIMENTAL: use syscall table hijacking method demonstrated on zx2c4's

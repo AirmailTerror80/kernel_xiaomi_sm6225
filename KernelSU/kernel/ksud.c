@@ -337,6 +337,7 @@ static bool is_init_rc(struct file *fp)
 	return true;
 }
 
+__attribute__((cold))
 static noinline void ksu_install_rc_hook(struct file *file)
 {
 	if (likely(!ksu_vfs_read_hook))
@@ -387,12 +388,13 @@ static noinline void ksu_install_rc_hook(struct file *file)
 #define STAT_STAT64 1
 
 __attribute__((cold))
-static noinline void ksu_common_newfstat_ret(unsigned long fd_long, void **statbuf_ptr, const int type)
+static noinline void ksu_common_newfstat_ret(unsigned int fd_int, void **statbuf_ptr, 
+			const int type, const char *syscall_name)
 {
 	if (!is_init(current_cred()))
 		return;
 
-	struct file *file = fget(fd_long);
+	struct file *file = fget(fd_int);
 	if (!file)
 		return;
 
@@ -402,7 +404,7 @@ static noinline void ksu_common_newfstat_ret(unsigned long fd_long, void **statb
 	}
 	fput(file);
 
-	pr_info("%s: stat init.rc \n", __func__);
+	pr_info("%s: stat init.rc \n", syscall_name);
 
 	uintptr_t statbuf_ptr_local = (uintptr_t)*(void **)statbuf_ptr;
 	void __user *statbuf = (void __user *)statbuf_ptr_local;
@@ -424,40 +426,38 @@ static noinline void ksu_common_newfstat_ret(unsigned long fd_long, void **statb
 #endif
 
 	if (copy_from_user(&size, st_size_ptr, len)) {
-		pr_info("%s: read statbuf 0x%lx failed \n", __func__, (unsigned long)st_size_ptr);
+		pr_info("%s: read statbuf 0x%lx failed \n", syscall_name, (unsigned long)st_size_ptr);
 		return;
 	}
 
 	new_size = size + ksu_rc_len;
-	pr_info("%s: adding ksu_rc_len: %ld -> %ld \n", __func__, size, new_size);
+	pr_info("%s: adding ksu_rc_len: %ld -> %ld \n", syscall_name, size, new_size);
 		
 	if (!copy_to_user(st_size_ptr, &new_size, len))
-		pr_info("%s: added ksu_rc_len \n", __func__);
+		pr_info("%s: added ksu_rc_len \n", syscall_name);
 	else
-		pr_info("%s: add ksu_rc_len failed: statbuf 0x%lx \n", __func__, (unsigned long)st_size_ptr);
+		pr_info("%s: add ksu_rc_len failed: statbuf 0x%lx \n", syscall_name, (unsigned long)st_size_ptr);
 	
 	return;
 }
 
 void ksu_handle_newfstat_ret(unsigned int *fd, struct stat __user **statbuf_ptr)
 {
-	unsigned long fd_long = (unsigned long)*fd;
-
 	if (likely(!ksu_vfs_read_hook))
 		return;
 
-	ksu_common_newfstat_ret(fd_long, (void **)statbuf_ptr, STAT_NATIVE);
+	ksu_common_newfstat_ret(*fd, (void **)statbuf_ptr, STAT_NATIVE, "sys_newfstat");
 }
 
 #if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
 void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **statbuf_ptr)
 {
-	unsigned long fd_long = (unsigned long)*fd;
 
 	if (likely(!ksu_vfs_read_hook))
 		return;
 
-	ksu_common_newfstat_ret(fd_long, (void **)statbuf_ptr, STAT_STAT64);
+	// WARNING: LE-only!!!
+	ksu_common_newfstat_ret(*(unsigned int *)fd, (void **)statbuf_ptr, STAT_STAT64, "sys_fstat64");
 }
 #endif
 
